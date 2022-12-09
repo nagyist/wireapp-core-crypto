@@ -21,9 +21,9 @@ let package = Package(
             name: "CoreCrypto",
             dependencies: ["CoreCryptoSwift"]
         ),
-        .systemLibrary(
+        .binaryTarget(
             name: "LibCoreCrypto",
-            path: "./lib"
+            path: "LibCoreCrypto.xcframework"
         ),
         .target(
             name: "CoreCryptoSwift",
