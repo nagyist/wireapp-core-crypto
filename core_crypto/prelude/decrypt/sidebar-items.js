@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":[["MlsConversationDecryptMessage","Represents the potential items a consumer might require after passing us an encrypted message we have decrypted for him"]]};

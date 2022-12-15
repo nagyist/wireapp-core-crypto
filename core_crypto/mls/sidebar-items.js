@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":[["MlsCentral","The entry point for the MLS CoreCrypto library. This struct provides all functionality to create and manage groups, make proposals and commits."],["MlsCiphersuite","A wrapper for the OpenMLS Ciphersuite, so that we are able to provide a default value."]]};

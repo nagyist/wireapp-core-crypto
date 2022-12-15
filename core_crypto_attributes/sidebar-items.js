@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"attr":[["durable","Will drop current MLS group in memory and replace it with the one in the keystore. This simulates an application crash. Once restarted, everything has to be loaded from the keystore, memory is lost."]]};

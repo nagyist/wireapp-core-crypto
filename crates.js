@@ -1,0 +1,1 @@
+window.ALL_CRATES = ["core_crypto","core_crypto_attributes","core_crypto_ffi","core_crypto_keystore","interop","mls_crypto_provider"];

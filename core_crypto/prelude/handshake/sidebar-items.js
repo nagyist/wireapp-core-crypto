@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":[["MlsCommitBundle","Returned when a commit is created"],["MlsConversationCreationMessage","Returned when initializing a conversation through a commit. Different from conversation created from a [`Welcome`] message or an external commit."],["MlsProposalBundle","Returned when a commit is created"]]};

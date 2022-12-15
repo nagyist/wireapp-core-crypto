@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":[["MlsWirePolicy","Wrapper over WireFormatPolicy"]],"struct":[["MlsConversationConfiguration","The configuration parameters for a group/conversation"],["MlsCustomConfiguration","The configuration parameters for a group/conversation which are not handled natively by openmls"]]};
