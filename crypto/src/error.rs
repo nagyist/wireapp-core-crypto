@@ -35,6 +35,9 @@ pub enum CryptoError {
     /// The keystore has no knowledge of such client; this shouldn't happen as Client::init is failsafe (find-else-create)
     #[error("The provided client signature has not been found in the keystore")]
     ClientSignatureNotFound,
+    /// The keystore already has a stored identity. As such, we cannot create a new raw identity
+    #[error("The keystore already contains a stored identity. Cannot create a new one!")]
+    IdentityAlreadyPresent,
     /// The keystore has found the client, but the provided signature doesn't match against what is stored
     #[error("The provided client signature doesn't match the keystore's")]
     ClientSignatureMismatch,

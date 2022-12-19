@@ -37,7 +37,7 @@ derive_more = { version = "0.99", features = ["deref"] }
 cfg-if = "1.0"
 hex = "0.4"
 
-openmls = "0.4"
+openmls = { version = "0.4", features = ["crypto-subtle"] }
 openmls_traits = "0.1"
 # FIXME: This is being pulled only because of flaky error types from openmls
 tls_codec = "0.2"

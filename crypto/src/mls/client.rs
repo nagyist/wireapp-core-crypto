@@ -34,6 +34,8 @@ use crate::{mls::CertificateBundle, mls::MlsCiphersuite, CryptoError, CryptoResu
 
 pub(crate) const INITIAL_KEYING_MATERIAL_COUNT: usize = 100;
 
+const PROVISIONAL_CLIENT_ID: &str = "__PROVISIONAL_CLIENT_ID__";
+
 const KEYPACKAGE_DEFAULT_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60 * 60 * 24 * 90); // 3 months
 
 /// A unique identifier for clients. A client is an identifier for each App a user is using, such as desktop,
@@ -149,6 +151,93 @@ impl Client {
         } else {
             Self::generate(id, certificate_bundle, backend, ciphersuites, true).await?
         };
+
+        Ok(client)
+    }
+
+    /// Initializes a raw keypair without an associated client ID
+    /// Returns the raw bytes of the public key
+    ///
+    /// # Arguments
+    /// * `certificate_bundle` - an optional x509 certificate
+    /// * `ciphersuites` - all ciphersuites this client is supposed to support
+    /// * `backend` - the KeyStore and crypto provider to read identities from
+    ///
+    /// # Errors
+    /// KeyStore and OpenMls errors can happen
+    pub async fn generate_raw_keypair(
+        certificate_bundle: Option<CertificateBundle>,
+        ciphersuites: &[MlsCiphersuite],
+        backend: &MlsCryptoProvider,
+    ) -> CryptoResult<Vec<u8>> {
+        let identity_count = backend.key_store().count::<MlsIdentity>().await?;
+        if identity_count > 0 {
+            return Err(CryptoError::IdentityAlreadyPresent);
+        }
+
+        let provisional_client_id = PROVISIONAL_CLIENT_ID.as_bytes().to_vec().into();
+
+        // TODO: support many ciphersuites
+        let ciphersuite = *ciphersuites.first().ok_or(CryptoError::ImplementationError)?;
+
+        let credentials = if let Some(cert) = certificate_bundle {
+            Self::generate_x509_credential_bundle(&provisional_client_id, cert.certificate_chain, cert.private_key)?
+        } else {
+            Self::generate_basic_credential_bundle(&provisional_client_id, ciphersuite, backend)?
+        };
+
+        let identity = MlsIdentity {
+            id: provisional_client_id.to_string(),
+            signature: identity_key(&credentials)?,
+            credential: credentials.to_key_store_value().map_err(MlsError::from)?,
+        };
+
+        backend.key_store().save(identity).await?;
+
+        Ok(credentials.credential().signature_key().as_slice().into())
+    }
+
+    /// Finalizes initialization using a 2-step process of uploading first a public key and then associating a new Client ID to that keypair
+    ///
+    /// **WARNING**: You have absolutely NO reason to call this if you didn't call [Client::generate_raw_keypair] first. You have been warned!
+    pub async fn init_with_external_client_id(
+        client_id: ClientId,
+        signature_public_key: &[u8],
+        ciphersuites: &[MlsCiphersuite],
+        backend: &MlsCryptoProvider,
+    ) -> CryptoResult<Self> {
+        let provisional_client_id: ClientId = PROVISIONAL_CLIENT_ID.as_bytes().to_vec().into();
+        let mut client = Self::load(
+            provisional_client_id.clone(),
+            &signature_public_key,
+            ciphersuites,
+            backend,
+        )
+        .await?;
+
+        let (_, sk) = client.credentials.into_parts();
+        let keypair = openmls::ciphersuite::signature::SignatureKeypair::from_bytes(
+            sk.signature_scheme,
+            sk.value,
+            signature_public_key.to_vec(),
+        );
+
+        let credentials = CredentialBundle::from_parts(client_id.0.clone(), keypair);
+
+        let identity = MlsIdentity {
+            id: client_id.to_string(),
+            signature: identity_key(&credentials)?,
+            credential: credentials.to_key_store_value().map_err(MlsError::from)?,
+        };
+
+        backend.key_store().save(identity).await?;
+        backend
+            .key_store()
+            .delete::<CredentialBundle>(&provisional_client_id)
+            .await?;
+
+        client.id = client_id;
+        client.credentials = credentials;
 
         Ok(client)
     }
