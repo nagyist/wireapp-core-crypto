@@ -24,7 +24,6 @@ use crate::mls::{
 
 impl MlsConversation {
     const EXPORTER_LABEL: &'static str = "exporter";
-    // TODO: check if this can be a constant or if we need to pass the group state
     const EXPORTER_CONTEXT: &'static [u8] = &[];
 
     /// See [MlsCentral::export_secret_key]
@@ -50,7 +49,7 @@ impl MlsCentral {
     /// # Arguments
     /// * `conversation_id` - the group/conversation id
     /// * `key_length` - the length of the key to be derived. If the value is higher than the
-    /// bounds of `u16` or the context hash * 255, an error will be returned
+    ///     bounds of `u16` or the context hash * 255, an error will be returned
     ///
     /// # Errors
     /// OpenMls secret generation error or conversation not found
@@ -86,7 +85,7 @@ impl MlsCentral {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
 
     use crate::{
         prelude::{CryptoError, MlsError},

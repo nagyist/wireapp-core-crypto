@@ -1,7 +1,7 @@
 name: Publish JVM packages
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: "${{ github.workflow }}-${{ github.ref }}"
 
 on:
   push:
@@ -15,8 +15,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
 
 jobs:
   build-linux-artifacts:
@@ -26,12 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: "Setup rust"
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
           rustflags: ''
           targets: "x86_64-unknown-linux-gnu"
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - name: Setup cargo-make
         uses: davidB/rust-cargo-make@v1
       - name: Build Artifacts
@@ -51,12 +47,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Setup rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
           rustflags: ''
           target: "x86_64-apple-darwin,aarch64-apple-darwin"
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - name: Setup cargo-make
         uses: davidB/rust-cargo-make@v1
       - name: Build Artifacts
@@ -86,11 +80,9 @@ jobs:
         with:
           java-version: "17"
           distribution: "adopt"
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
           rustflags: ''
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - name: Setup cargo-make
         uses: davidB/rust-cargo-make@v1
       - name: Build Artifacts
@@ -98,9 +90,9 @@ jobs:
           cd crypto-ffi
           cargo make ffi-kotlin
       - name: Gradle Setup
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
       - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v3
+        uses: gradle/actions/wrapper-validation@v4
       - name: Download x86_64 Linux Artifact
         uses: actions/download-artifact@v4
         with:

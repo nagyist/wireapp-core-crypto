@@ -34,7 +34,7 @@ macro_rules! test_for_entity {
     ($test_name:ident, $entity:ident $(ignore_entity_count:$ignore_entity_count:literal)? $(ignore_update:$ignore_update:literal)? $(ignore_find_many:$ignore_find_many:literal)?) => {
         #[apply(all_storage_types)]
         #[wasm_bindgen_test]
-        pub async fn $test_name(store: core_crypto_keystore::Connection) {
+        async fn $test_name(store: core_crypto_keystore::Connection) {
             let store = store.await;
             let _ = pretty_env_logger::try_init();
             let mut entity = crate::tests_impl::can_save_entity::<$entity>(&store).await;
@@ -42,7 +42,7 @@ macro_rules! test_for_entity {
             crate::tests_impl::can_find_entity::<$entity>(&store, &entity).await;
             let ignore_update = pat_to_bool!($($ignore_update)?);
 
-            // TODO: entities which do not support update tend not to have a primary key constraint.
+            // TODO: entities which do not support update tend not to have a primary key constraint. Tracking issue: WPB-9649
             // This can cause complications with the "default" remove implementation which does not support deleting many entities.
             // We should have an automated way to test this here
 
@@ -70,7 +70,7 @@ mod tests_impl {
         entities::{Entity, EntityFindParams},
     };
 
-    pub async fn can_save_entity<R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection>>(
+    pub(crate) async fn can_save_entity<R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection>>(
         store: &CryptoKeystore,
     ) -> R {
         let entity = R::random();
@@ -78,7 +78,9 @@ mod tests_impl {
         entity
     }
 
-    pub async fn can_find_entity<R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection> + 'static>(
+    pub(crate) async fn can_find_entity<
+        R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection> + 'static,
+    >(
         store: &CryptoKeystore,
         entity: &R,
     ) {
@@ -87,7 +89,7 @@ mod tests_impl {
         assert_eq!(*entity, entity2);
     }
 
-    pub async fn can_update_entity<R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection>>(
+    pub(crate) async fn can_update_entity<R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection>>(
         store: &CryptoKeystore,
         entity: &mut R,
     ) {
@@ -97,7 +99,7 @@ mod tests_impl {
         assert_eq!(*entity, entity2);
     }
 
-    pub async fn can_remove_entity<R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection>>(
+    pub(crate) async fn can_remove_entity<R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection>>(
         store: &CryptoKeystore,
         entity: R,
     ) {
@@ -106,7 +108,7 @@ mod tests_impl {
         assert!(entity2.is_none());
     }
 
-    pub async fn can_list_entities_with_find_many<
+    pub(crate) async fn can_list_entities_with_find_many<
         R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection>,
     >(
         store: &CryptoKeystore,
@@ -128,7 +130,7 @@ mod tests_impl {
         }
     }
 
-    pub async fn can_list_entities_with_find_all<
+    pub(crate) async fn can_list_entities_with_find_all<
         R: EntityTestExt + Entity<ConnectionType = KeystoreDatabaseConnection>,
     >(
         store: &CryptoKeystore,
@@ -142,8 +144,10 @@ mod tests_impl {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use crate::common::*;
+    use crate::utils::EntityTestExt;
+    use core_crypto_keystore::{Connection, CryptoKeystoreError};
     use wasm_bindgen_test::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -160,9 +164,11 @@ pub mod tests {
             test_for_entity!(test_mls_signature_keypair, MlsSignatureKeyPair ignore_update:true);
             test_for_entity!(test_mls_psk_bundle, MlsPskBundle);
             test_for_entity!(test_mls_encryption_keypair, MlsEncryptionKeyPair);
+            test_for_entity!(test_mls_epoch_encryption_keypair, MlsEpochEncryptionKeyPair);
             test_for_entity!(test_mls_hpke_private_key, MlsHpkePrivateKey);
             test_for_entity!(test_e2ei_intermediate_cert, E2eiIntermediateCert);
             test_for_entity!(test_e2ei_crl, E2eiCrl);
+            test_for_entity!(test_e2ei_enrollment, E2eiEnrollment ignore_update:true);
         }
     }
     cfg_if::cfg_if! {
@@ -171,6 +177,19 @@ pub mod tests {
             test_for_entity!(test_proteus_prekey, ProteusPrekey);
             test_for_entity!(test_proteus_session, ProteusSession);
         }
+    }
+    #[apply(all_storage_types)]
+    #[wasm_bindgen_test]
+    pub async fn update_e2ei_enrollment_emits_error(store: Connection) {
+        let store = store.await;
+
+        let mut entity = E2eiEnrollment::random();
+        store.save(entity.clone()).await.unwrap();
+        entity.random_update();
+        let error = store.save(entity).await.unwrap_err();
+        assert!(matches!(error, CryptoKeystoreError::AlreadyExists));
+
+        teardown(store).await;
     }
 }
 
@@ -537,6 +556,46 @@ pub mod utils {
                     let mut rng = rand::thread_rng();
                     self.content = vec![0; rng.gen_range(MAX_BLOB_SIZE)];
                     rng.fill(&mut self.content[..]);
+                }
+            }
+
+             impl EntityTestExt for core_crypto_keystore::entities::E2eiEnrollment {
+                fn random() -> Self {
+                    let mut rng = rand::thread_rng();
+
+                    let uuid = uuid::Uuid::new_v4();
+                    let id: Vec<u8> = uuid.into_bytes().into();
+                    let content = vec![0; rng.gen_range(MAX_BLOB_SIZE)];
+                    Self {
+                        id,
+                        content,
+                    }
+                }
+
+                fn random_update(&mut self) {
+                    let mut rng = rand::thread_rng();
+                    self.content = vec![0; rng.gen_range(MAX_BLOB_SIZE)];
+                    rng.fill(&mut self.content[..]);
+                }
+            }
+
+            impl EntityTestExt for core_crypto_keystore::entities::MlsEpochEncryptionKeyPair {
+                fn random() -> Self {
+                    let uuid = uuid::Uuid::new_v4();
+                    let id: Vec<u8> = uuid.into_bytes().into();
+
+                    let mut rng = rand::thread_rng();
+                    let keypairs = vec![0; rng.gen_range(MAX_BLOB_SIZE)];
+                    Self {
+                        id,
+                        keypairs,
+                    }
+                }
+
+                fn random_update(&mut self) {
+                    let mut rng = rand::thread_rng();
+                    self.keypairs = vec![0; rng.gen_range(MAX_BLOB_SIZE)];
+                    rng.fill(&mut self.keypairs[..]);
                 }
             }
         }

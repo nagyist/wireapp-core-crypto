@@ -110,8 +110,9 @@ impl Client {
             .mls_fetch_keypackages::<KeyPackage>(count as u32)
             .await?
             .into_iter()
-            // TODO: do this filtering in SQL when the schema is updated
-            .filter(|kp| kp.ciphersuite() == ciphersuite.0)
+            // TODO: do this filtering in SQL when the schema is updated. Tracking issue: WPB-9599
+            .filter(|kp|
+                kp.ciphersuite() == ciphersuite.0 && MlsCredentialType::from(kp.leaf_node().credential().credential_type()) == credential_type)
             .collect::<Vec<_>>();
 
         let kpb_count = existing_kps.len();
@@ -169,7 +170,7 @@ impl Client {
         let valid_count = kps
             .into_iter()
             .map(|kp| core_crypto_keystore::deser::<KeyPackage>(&kp.keypackage))
-            // TODO: do this filtering in SQL when the schema is updated
+            // TODO: do this filtering in SQL when the schema is updated. Tracking issue: WPB-9599
             .filter(|kp| {
                 kp.as_ref()
                     .map(|b| b.ciphersuite() == ciphersuite.0 && MlsCredentialType::from(b.leaf_node().credential().credential_type()) == credential_type)
@@ -275,7 +276,7 @@ impl Client {
             .collect();
 
         for (kp, kp_ref) in &kp_to_delete {
-            // TODO: maybe rewrite this to optimize it. But honestly it's called so rarely and on a so tiny amount of data
+            // TODO: maybe rewrite this to optimize it. But honestly it's called so rarely and on a so tiny amount of data. Tacking issue: WPB-9600
             MlsKeyPackage::delete(conn, &[kp_ref.as_slice().into()]).await?;
             MlsHpkePrivateKey::delete(conn, &[kp.hpke_init_key().as_slice().into()]).await?;
             MlsEncryptionKeyPair::delete(conn, &[kp.leaf_node().encryption_key().as_slice().into()]).await?;
@@ -365,7 +366,7 @@ impl MlsCentral {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use openmls::prelude::{KeyPackage, KeyPackageIn, KeyPackageRef, ProtocolVersion};
     use openmls_traits::types::VerifiableCiphersuite;
     use openmls_traits::OpenMlsCryptoProvider;
@@ -373,6 +374,7 @@ pub mod tests {
 
     use mls_crypto_provider::MlsCryptoProvider;
 
+    use crate::e2e_identity::tests::{e2ei_enrollment, init_activation_or_rotation, noop_restore};
     use crate::prelude::key_package::INITIAL_KEYING_MATERIAL_COUNT;
     use crate::prelude::MlsConversationConfiguration;
     use crate::test_utils::*;
@@ -383,7 +385,7 @@ pub mod tests {
 
     #[apply(all_cred_cipher)]
     #[wasm_bindgen_test]
-    pub async fn can_assess_keypackage_expiration(case: TestCase) {
+    async fn can_assess_keypackage_expiration(case: TestCase) {
         let (cs, ct) = (case.ciphersuite(), case.credential_type);
         let backend = MlsCryptoProvider::try_new_in_memory("test").await.unwrap();
         let x509_test_chain = if case.is_x509() {
@@ -417,7 +419,65 @@ pub mod tests {
 
     #[apply(all_cred_cipher)]
     #[wasm_bindgen_test]
-    pub async fn generates_correct_number_of_kpbs(case: TestCase) {
+    async fn requesting_x509_key_packages_after_basic(case: TestCase) {
+        // Basic test case
+        if !case.is_basic() {
+            return;
+        }
+        run_test_with_client_ids(case.clone(), ["alice"], move |[mut client_context]| {
+            Box::pin(async move {
+                let signature_scheme = case.signature_scheme();
+                let cipher_suite = case.ciphersuite();
+
+                // Generate 5 Basic key packages first
+                let _basic_key_packages = client_context
+                    .mls_central
+                    .get_or_create_client_keypackages(cipher_suite, MlsCredentialType::Basic, 5)
+                    .await
+                    .unwrap();
+
+                // Set up E2E identity
+                let test_chain = x509::X509TestChain::init_for_random_clients(signature_scheme, 1);
+
+                let (mut enrollment, cert_chain) = e2ei_enrollment(
+                    &mut client_context,
+                    &case,
+                    &test_chain,
+                    None,
+                    false,
+                    init_activation_or_rotation,
+                    noop_restore,
+                )
+                .await
+                .unwrap();
+
+                let _rotate_bundle = client_context
+                    .mls_central
+                    .e2ei_rotate_all(&mut enrollment, cert_chain, 5)
+                    .await
+                    .unwrap();
+
+                // E2E identity has been set up correctly
+                assert!(client_context.mls_central.e2ei_is_enabled(signature_scheme).unwrap());
+
+                // Request X509 key packages
+                let x509_key_packages = client_context
+                    .mls_central
+                    .get_or_create_client_keypackages(cipher_suite, MlsCredentialType::X509, 5)
+                    .await
+                    .unwrap();
+
+                // Verify that the key packages are X509
+                assert!(x509_key_packages.iter().all(|kp| MlsCredentialType::X509
+                    == MlsCredentialType::from(kp.leaf_node().credential().credential_type())));
+            })
+        })
+        .await
+    }
+
+    #[apply(all_cred_cipher)]
+    #[wasm_bindgen_test]
+    async fn generates_correct_number_of_kpbs(case: TestCase) {
         run_test_with_client_ids(case.clone(), ["alice"], move |[mut cc]| {
             Box::pin(async move {
                 const N: usize = 2;
@@ -500,7 +560,7 @@ pub mod tests {
 
     #[apply(all_cred_cipher)]
     #[wasm_bindgen_test]
-    pub async fn automatically_prunes_lifetime_expired_keypackages(case: TestCase) {
+    async fn automatically_prunes_lifetime_expired_keypackages(case: TestCase) {
         const UNEXPIRED_COUNT: usize = 125;
         const EXPIRED_COUNT: usize = 200;
         let backend = MlsCryptoProvider::try_new_in_memory("test").await.unwrap();
@@ -579,7 +639,7 @@ pub mod tests {
 
     #[apply(all_cred_cipher)]
     #[wasm_bindgen_test]
-    pub async fn new_keypackage_has_correct_extensions(case: TestCase) {
+    async fn new_keypackage_has_correct_extensions(case: TestCase) {
         run_test_with_client_ids(case.clone(), ["alice"], move |[cc]| {
             Box::pin(async move {
                 let kps = cc

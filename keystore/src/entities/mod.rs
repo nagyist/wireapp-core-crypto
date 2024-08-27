@@ -43,6 +43,8 @@ mod platform {
 pub use self::platform::*;
 
 use crate::connection::DatabaseConnection;
+#[cfg(not(target_family = "wasm"))]
+use crate::sha256;
 use crate::{CryptoKeystoreError, CryptoKeystoreResult, MissingKeyErrorKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -60,6 +62,11 @@ impl<'a> StringEntityId<'a> {
 
     pub fn as_hex_string(&self) -> String {
         hex::encode(self.0)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn sha256(&self) -> String {
+        sha256(self.0)
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -107,15 +114,15 @@ impl EntityFindParams {
     pub fn to_sql(&self) -> String {
         use std::fmt::Write as _;
         let mut query: String = "".into();
-        if let Some(limit) = self.limit {
-            let _ = write!(query, " LIMIT {limit}");
-        }
         if let Some(offset) = self.offset {
             let _ = write!(query, " OFFSET {offset}");
         }
         let _ = write!(query, " ORDER BY rowid");
         if self.reverse {
             let _ = write!(query, " DESC");
+        }
+        if let Some(limit) = self.limit {
+            let _ = write!(query, " LIMIT {limit}");
         }
 
         query
@@ -195,11 +202,6 @@ cfg_if::cfg_if! {
                 Self::encrypt_with_nonce_and_aad(cipher, data, &nonce_bytes, aad)
             }
 
-            fn reencrypt_data(cipher: &aes_gcm::Aes256Gcm, encrypted: &[u8], clear: &[u8], aad: &[u8]) -> CryptoKeystoreResult<Vec<u8>> {
-                let nonce_bytes = &encrypted[..AES_GCM_256_NONCE_SIZE];
-                Self::encrypt_with_nonce_and_aad(cipher, clear, nonce_bytes, aad)
-            }
-
             fn decrypt(&mut self, cipher: &aes_gcm::Aes256Gcm) -> CryptoKeystoreResult<()>;
             fn decrypt_data(cipher: &aes_gcm::Aes256Gcm, data: &[u8], aad: &[u8]) -> CryptoKeystoreResult<Vec<u8>> {
                 use aes_gcm::aead::Aead as _;
@@ -226,5 +228,21 @@ cfg_if::cfg_if! {
         pub trait Entity: EntityBase {
             fn id_raw(&self) -> &[u8];
         }
+
+        pub trait EntityIdStringExt: Entity {
+            fn id_hex(&self) -> String {
+                hex::encode(self.id_raw())
+            }
+
+            fn id_sha256(&self) -> String {
+                sha256(self.id_raw())
+            }
+
+            fn id_from_hex(id_hex: &str) -> CryptoKeystoreResult<Vec<u8>> {
+                hex::decode(id_hex).map_err(Into::into)
+            }
+        }
+
+        impl<T: Entity> EntityIdStringExt for T {}
     }
 }

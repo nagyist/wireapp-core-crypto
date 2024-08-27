@@ -12,7 +12,7 @@ use crate::prelude::{
 pub(crate) mod buffer_external_commit;
 pub(crate) mod ciphersuite;
 pub(crate) mod client;
-pub(crate) mod conversation;
+pub mod conversation;
 pub(crate) mod credential;
 pub(crate) mod external_commit;
 pub(crate) mod external_proposal;
@@ -38,7 +38,6 @@ pub(crate) mod config {
         /// Entropy pool seed for the internal PRNG
         pub external_entropy: Option<EntropySeed>,
         /// All supported ciphersuites
-        /// TODO: pending wire-server API supports selecting a ciphersuite only the first item of this array will be used.
         pub ciphersuites: Vec<ciphersuite::MlsCiphersuite>,
         /// Number of [openmls::prelude::KeyPackage] to create when creating a MLS client. Default to [INITIAL_KEYING_MATERIAL_COUNT]
         pub nb_init_key_packages: Option<usize>,
@@ -90,15 +89,15 @@ pub(crate) mod config {
             entropy: Option<Vec<u8>>,
             nb_init_key_packages: Option<usize>,
         ) -> CryptoResult<Self> {
-            // TODO: probably more complex rules to enforce
+            // TODO: probably more complex rules to enforce. Tracking issue: WPB-9598
             if store_path.trim().is_empty() {
                 return Err(CryptoError::MalformedIdentifier("store_path"));
             }
-            // TODO: probably more complex rules to enforce
+            // TODO: probably more complex rules to enforce. Tracking issue: WPB-9598
             if identity_key.trim().is_empty() {
                 return Err(CryptoError::MalformedIdentifier("identity_key"));
             }
-            // TODO: probably more complex rules to enforce
+            // TODO: probably more complex rules to enforce. Tracking issue: WPB-9598
             if let Some(client_id) = client_id.as_ref() {
                 if client_id.is_empty() {
                     return Err(CryptoError::MalformedIdentifier("client_id"));
@@ -444,7 +443,7 @@ impl MlsCentral {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use wasm_bindgen_test::*;
 
     use crate::prelude::{CertificateBundle, ClientIdentifier, MlsCredentialType, INITIAL_KEYING_MATERIAL_COUNT};
@@ -455,12 +454,12 @@ pub mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    pub mod conversation_epoch {
+    mod conversation_epoch {
         use super::*;
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn can_get_newly_created_conversation_epoch(case: TestCase) {
+        async fn can_get_newly_created_conversation_epoch(case: TestCase) {
             run_test_with_central(case.clone(), move |[mut central]| {
                 Box::pin(async move {
                     let id = conversation_id();
@@ -478,7 +477,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn can_get_conversation_epoch(case: TestCase) {
+        async fn can_get_conversation_epoch(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob"],
@@ -505,7 +504,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn conversation_not_found(case: TestCase) {
+        async fn conversation_not_found(case: TestCase) {
             run_test_with_central(case.clone(), move |[mut central]| {
                 Box::pin(async move {
                     let id = conversation_id();
@@ -517,14 +516,14 @@ pub mod tests {
         }
     }
 
-    pub mod invariants {
+    mod invariants {
         use crate::prelude::MlsCiphersuite;
 
         use super::*;
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn can_create_from_valid_configuration(case: TestCase) {
+        async fn can_create_from_valid_configuration(case: TestCase) {
             run_tests(move |[tmp_dir_argument]| {
                 Box::pin(async move {
                     let configuration = MlsCentralConfiguration::try_new(
@@ -546,7 +545,7 @@ pub mod tests {
 
         #[test]
         #[wasm_bindgen_test]
-        pub fn store_path_should_not_be_empty_nor_blank() {
+        fn store_path_should_not_be_empty_nor_blank() {
             let ciphersuites = vec![MlsCiphersuite::default()];
             let configuration = MlsCentralConfiguration::try_new(
                 " ".to_string(),
@@ -564,7 +563,7 @@ pub mod tests {
 
         #[cfg_attr(not(target_family = "wasm"), async_std::test)]
         #[wasm_bindgen_test]
-        pub async fn identity_key_should_not_be_empty_nor_blank() {
+        async fn identity_key_should_not_be_empty_nor_blank() {
             run_tests(|[tmp_dir_argument]| {
                 Box::pin(async move {
                     let ciphersuites = vec![MlsCiphersuite::default()];
@@ -587,7 +586,7 @@ pub mod tests {
 
         #[cfg_attr(not(target_family = "wasm"), async_std::test)]
         #[wasm_bindgen_test]
-        pub async fn client_id_should_not_be_empty() {
+        async fn client_id_should_not_be_empty() {
             run_tests(|[tmp_dir_argument]| {
                 Box::pin(async move {
                     let ciphersuites = vec![MlsCiphersuite::default()];
@@ -611,7 +610,7 @@ pub mod tests {
 
     #[apply(all_cred_cipher)]
     #[wasm_bindgen_test]
-    pub async fn create_conversation_should_fail_when_already_exists(case: TestCase) {
+    async fn create_conversation_should_fail_when_already_exists(case: TestCase) {
         run_test_with_client_ids(case.clone(), ["alice"], move |[mut alice_central]| {
             Box::pin(async move {
                 let id = conversation_id();
@@ -635,7 +634,7 @@ pub mod tests {
 
     #[apply(all_cred_cipher)]
     #[wasm_bindgen_test]
-    pub async fn can_fetch_client_public_key(case: TestCase) {
+    async fn can_fetch_client_public_key(case: TestCase) {
         run_tests(move |[tmp_dir_argument]| {
             Box::pin(async move {
                 let configuration = MlsCentralConfiguration::try_new(
@@ -657,7 +656,7 @@ pub mod tests {
 
     #[apply(all_cred_cipher)]
     #[wasm_bindgen_test]
-    pub async fn can_2_phase_init_central(case: TestCase) {
+    async fn can_2_phase_init_central(case: TestCase) {
         run_tests(move |[tmp_dir_argument]| {
             Box::pin(async move {
                 let x509_test_chain = X509TestChain::init_empty(case.signature_scheme());

@@ -1,20 +1,22 @@
-name: Check bindings
+name: Build bindings
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
-on: [push]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
 
 jobs:
-  check-android:
+  build-android:
     if: github.repository == 'wireapp/core-crypto'
     runs-on: ubuntu-latest
     steps:
@@ -25,16 +27,14 @@ jobs:
           java-version: "17"
           distribution: "adopt"
       - name: Gradle Setup
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
       - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v3
+        uses: gradle/actions/wrapper-validation@v4
       - name: "Setup rust"
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
           rustflags: ''
           target: "armv7-linux-androideabi,aarch64-linux-android,x86_64-linux-android,i686-linux-android"
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - name: Setup cargo-make
         uses: davidB/rust-cargo-make@v1
       - name: Setup Android SDK
@@ -52,23 +52,22 @@ jobs:
           cd crypto-ffi/bindings
           ./gradlew android:build -x lint -x lintRelease
 
-  check-swift:
+  build-swift:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
           rustflags: ''
           target: "aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim"
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - name: Setup cargo-make
         uses: davidB/rust-cargo-make@v1
-      - run: |
+      - name: Build Swift package
+        run: |
           cd crypto-ffi
           cargo make ios-create-xcframework
 
-  check-wasm:
+  build-and-test-wasm:
     runs-on: ubuntu-latest
     env:
       # ensures we have same flags as when publishing
@@ -79,13 +78,11 @@ jobs:
         id: setup-chrome
         with:
           chrome-version: stable
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
           rustflags: ''
           target: wasm32-unknown-unknown
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
-      - uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - uses: actions/setup-node@v4
@@ -97,7 +94,6 @@ jobs:
         uses: jetli/wasm-pack-action@v0.4.0
         with:
           version: "latest"
-
       - name: Build & test WASM / JS package
         run: |
           cd crypto-ffi
@@ -105,4 +101,3 @@ jobs:
           bun install
           cargo make wasm
           bun test --bail
-

@@ -26,7 +26,7 @@ use futures_util::future::TryFutureExt;
 use js_sys::{Promise, Uint8Array};
 use std::ops::DerefMut;
 use tls_codec::{Deserialize, Serialize};
-use tracing::level_filters::LevelFilter;
+use tracing::{level_filters::LevelFilter, Level};
 use tracing_subscriber::fmt::{self, MakeWriter};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -150,8 +150,6 @@ pub enum Ciphersuite {
     MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448 = 0x0006,
     /// DH KEM P384 | AES-GCM 256 | SHA2-384 | EcDSA P384
     MLS_256_DHKEMP384_AES256GCM_SHA384_P384 = 0x0007,
-    /// x25519Kyber768Draft00 Hybrid KEM | AES-GCM 128 | SHA2-256 | Ed25519
-    MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519 = 0xF031,
 }
 
 impl From<MlsCiphersuite> for Ciphersuite {
@@ -183,9 +181,6 @@ impl From<CiphersuiteName> for Ciphersuite {
                 Self::MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448
             }
             CiphersuiteName::MLS_256_DHKEMP384_AES256GCM_SHA384_P384 => Self::MLS_256_DHKEMP384_AES256GCM_SHA384_P384,
-            CiphersuiteName::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519 => {
-                Self::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519
-            }
         }
     }
 }
@@ -207,9 +202,6 @@ impl Into<CiphersuiteName> for Ciphersuite {
                 CiphersuiteName::MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448
             }
             Self::MLS_256_DHKEMP384_AES256GCM_SHA384_P384 => CiphersuiteName::MLS_256_DHKEMP384_AES256GCM_SHA384_P384,
-            Self::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519 => {
-                CiphersuiteName::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519
-            }
         }
     }
 }
@@ -1067,9 +1059,19 @@ impl From<WirePolicy> for MlsWirePolicy {
 }
 
 #[wasm_bindgen]
+pub fn set_logger(logger: CoreCryptoWasmLogger, level: CoreCryptoLogLevel) {
+    fmt::fmt()
+        .json()
+        .with_writer(logger)
+        .with_max_level(LevelFilter::from(level))
+        .init()
+}
+
+#[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct CoreCryptoWasmLogger {
     logger: js_sys::Function,
+    level: CoreCryptoLogLevel,
     ctx: JsValue,
 }
 
@@ -1098,18 +1100,44 @@ impl From<CoreCryptoLogLevel> for LevelFilter {
     }
 }
 
+impl From<&Level> for CoreCryptoLogLevel {
+    fn from(value: &Level) -> CoreCryptoLogLevel {
+        match *value {
+            Level::WARN => CoreCryptoLogLevel::Warn,
+            Level::ERROR => CoreCryptoLogLevel::Error,
+            Level::INFO => CoreCryptoLogLevel::Info,
+            Level::DEBUG => CoreCryptoLogLevel::Debug,
+            Level::TRACE => CoreCryptoLogLevel::Trace,
+        }
+    }
+}
+
 #[wasm_bindgen]
 impl CoreCryptoWasmLogger {
     #[wasm_bindgen(constructor)]
     pub fn new(logger: js_sys::Function, ctx: JsValue) -> Self {
-        Self { logger, ctx }
+        Self {
+            logger,
+            level: CoreCryptoLogLevel::Info,
+            ctx,
+        }
+    }
+
+    fn clone_with_level(&self, level: &Level) -> Self {
+        Self {
+            logger: self.logger.clone(),
+            level: level.into(),
+            ctx: self.ctx.clone(),
+        }
     }
 }
 
 impl std::io::Write for CoreCryptoWasmLogger {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let message = String::from_utf8_lossy(buf);
-        let _ = self.logger.call1(&self.ctx, &JsValue::from(message.as_ref()));
+        let _ = self
+            .logger
+            .call2(&self.ctx, &JsValue::from(self.level), &JsValue::from(message.as_ref()));
         Ok(buf.len())
     }
 
@@ -1123,6 +1151,10 @@ impl MakeWriter<'_> for CoreCryptoWasmLogger {
 
     fn make_writer(&self) -> Self::Writer {
         self.clone()
+    }
+
+    fn make_writer_for(&'_ self, meta: &tracing::Metadata<'_>) -> Self::Writer {
+        self.clone_with_level(meta.level())
     }
 }
 
@@ -1501,13 +1533,6 @@ impl CoreCrypto {
             }
             .err_into(),
         )
-    }
-
-    pub fn set_logger(&self, logger: CoreCryptoWasmLogger, level: CoreCryptoLogLevel) {
-        fmt::fmt()
-            .with_max_level(LevelFilter::from(level))
-            .with_writer(logger)
-            .init()
     }
 
     /// Returns:: [`WasmCryptoResult<js_sys::Uint8Array>`]

@@ -21,11 +21,8 @@ RANLIB_i686-linux-android = "llvm-ranlib"
 # ? the presence of a `.git` folder
 # ? With us having a git dependency to ring, this triggers this local development behavior, preventing
 # ? release builds on certain platforms. Gotta love build systems that are "UB as a service"
-# TODO: Remove this once we target a crates.io version of ring. Probably never!
+# TODO: Remove this once we target a crates.io version of ring. Probably never! Tracking issue: WPB-9580
 CFLAGS="-Wno-error=inline"
-
-[unstable]
-build-std = ["std", "panic_abort"]
 
 [alias]
 xtask = "run --manifest-path ./xtask/Cargo.toml --"
@@ -40,14 +37,12 @@ runner = [
     "--webdriver=chrome",
     "--timeout=600"
 ]
-# rustflags = "-C target-feature=+atomics,+bulk-memory,+mutable-globals"
 
 # Android linkage
 [target.armv7-linux-androideabi]
 ar = "llvm-ar"
 linker = "armv7a-linux-androideabi24-clang"
 rustflags = [
-    "-C", "link-args=-Lsupport/android",
     "-C", "target_feature=+neon",
     "-C", "link-args=-latomic"
 ]
@@ -56,7 +51,6 @@ rustflags = [
 ar = "llvm-ar"
 linker = "aarch64-linux-android24-clang"
 rustflags = [
-    "-C", "link-args=-Lsupport/android",
     "-C", "link-args=-latomic"
 ]
 
@@ -64,7 +58,6 @@ rustflags = [
 ar = "llvm-ar"
 linker = "x86_64-linux-android24-clang"
 rustflags = [
-    "-C", "link-args=-Lsupport/android",
     "-C", "link-args=-latomic"
 ]
 
@@ -72,6 +65,5 @@ rustflags = [
 ar = "llvm-ar"
 linker = "i686-linux-android24-clang"
 rustflags = [
-    "-C", "link-args=-Lsupport/android",
     "-C", "link-args=-latomic"
 ]

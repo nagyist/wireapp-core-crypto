@@ -17,14 +17,14 @@
 
 use getrandom::getrandom;
 
-pub use rstest::*;
-pub use rstest_reuse::{self, *};
+pub(crate) use rstest::*;
+pub(crate) use rstest_reuse::{self, *};
 
 use mls_crypto_provider::{EntropySeed, MlsCryptoProvider};
 
 const TEST_ENCRYPTION_KEY: &str = "test1234";
 
-pub fn store_name() -> String {
+pub(crate) fn store_name() -> String {
     use rand::Rng as _;
     let mut rng = rand::thread_rng();
     let name: String = (0..12)
@@ -40,7 +40,7 @@ pub fn store_name() -> String {
 }
 
 #[fixture]
-pub async fn setup(#[default(false)] in_memory: bool) -> MlsCryptoProvider {
+pub(crate) async fn setup(#[default(false)] in_memory: bool) -> MlsCryptoProvider {
     let store_name = store_name();
     let store = if !in_memory {
         core_crypto_keystore::Connection::open_with_key(store_name, TEST_ENCRYPTION_KEY).await
@@ -131,47 +131,6 @@ pub fn entropy() -> EntropySeed {
     openmls::prelude::Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
     Some(entropy())
 )]
-// TODO: The next ciphersuite isn't supported because of the lack of  ed448 (status unknown) crate
-// #[case::ed448_aes256_sys_entropy__persistent(
-//     setup(false),
-//     openmls::prelude::Ciphersuite::MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448,
-//     None
-// )]
-// #[case::ed448_aes256__ext_entropy__persistent(
-//     setup(false),
-//     openmls::prelude::Ciphersuite::MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448,
-//     Some(entropy())
-// )]
-// #[case::ed448_aes256__sys_entropy__in_memory(
-//     setup(true),
-//     openmls::prelude::Ciphersuite::MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448,
-//     None
-// )]
-// #[case::ed448_aes256__ext_entropy__in_memory(
-//     setup(true),
-//     openmls::prelude::Ciphersuite::MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448,
-//     Some(entropy())
-// )]
-// #[case::ed448_chacha20poly1305_sys_entropy__persistent(
-//     setup(false),
-//     openmls::prelude::Ciphersuite::MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448,
-//     None
-// )]
-// #[case::ed448_chacha20poly1305__ext_entropy__persistent(
-//     setup(false),
-//     openmls::prelude::Ciphersuite::MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448,
-//     Some(entropy())
-// )]
-// #[case::ed448_chacha20poly1305__sys_entropy__in_memory(
-//     setup(true),
-//     openmls::prelude::Ciphersuite::MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448,
-//     None
-// )]
-// #[case::ed448_chacha20poly1305__ext_entropy__in_memory(
-//     setup(true),
-//     openmls::prelude::Ciphersuite::MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448,
-//     Some(entropy())
-// )]
 #[case::p521_aes256__sys_entropy__persistent(
     setup(false),
     openmls::prelude::Ciphersuite::MLS_256_DHKEMP521_AES256GCM_SHA512_P521,
@@ -212,26 +171,6 @@ pub fn entropy() -> EntropySeed {
     openmls::prelude::Ciphersuite::MLS_256_DHKEMP384_AES256GCM_SHA384_P384,
     Some(entropy())
 )]
-#[case::xyber768d00_aes128__sys_entropy__persistent(
-    setup(false),
-    openmls::prelude::Ciphersuite::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519,
-    None
-)]
-#[case::xyber768d00_aes128__ext_entropy__persistent(
-    setup(false),
-    openmls::prelude::Ciphersuite::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519,
-    Some(entropy())
-)]
-#[case::xyber768d00_aes128__sys_entropy__in_memory(
-    setup(true),
-    openmls::prelude::Ciphersuite::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519,
-    None
-)]
-#[case::xyber768d00_aes128__ext_entropy__in_memory(
-    setup(true),
-    openmls::prelude::Ciphersuite::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519,
-    Some(entropy())
-)]
 pub fn all_storage_types_and_ciphersuites(
     #[case]
     #[future]
@@ -242,7 +181,7 @@ pub fn all_storage_types_and_ciphersuites(
 }
 
 #[inline(always)]
-pub async fn teardown(backend: MlsCryptoProvider) {
+pub(crate) async fn teardown(backend: MlsCryptoProvider) {
     let store = backend.unwrap_keystore();
     store.wipe().await.unwrap();
 }

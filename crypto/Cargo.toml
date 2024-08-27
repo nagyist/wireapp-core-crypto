@@ -2,7 +2,7 @@
 name = "core-crypto"
 description = "Abstraction over OpenMLS with persistent keystore"
 repository = "https://github.com/wireapp/core-crypto"
-version = "1.0.0-rc.60"
+version = "1.0.2"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
@@ -12,115 +12,95 @@ name = "core_crypto"
 crate-type = ["lib", "cdylib"]
 
 [features]
-default = ["proteus", "cryptobox-migrate", "test-pq-cipher"]
+default = ["proteus", "cryptobox-migrate"]
 proteus = ["dep:proteus-wasm", "dep:proteus-traits", "core-crypto-keystore/proteus-keystore"]
 cryptobox-migrate = ["proteus", "proteus-wasm?/cryptobox-identity", "dep:async-fs", "dep:futures-lite", "dep:rexie", "dep:base64"]
 # for test/bench all ciphersuites
-test-all-cipher = ["test-pq-cipher"]
-test-pq-cipher = []
+test-all-cipher = []
 # execute benches with also real db to better see overhead
 bench-in-db = []
 uniffi = ["dep:uniffi"]
 
 [dependencies]
-thiserror = "1.0"
-derive_more = { version = "0.99", features = ["from", "into", "deref", "deref_mut"] }
-strum = { version = "0.26", features = ["derive"] }
-cfg-if = "1.0"
-hex = "0.4"
-futures-util = "0.3"
+derive_more.workspace = true
+thiserror.workspace = true
+strum.workspace = true
+cfg-if.workspace = true
+hex.workspace = true
+futures-util.workspace = true
 
-openmls = { version = "1", features = ["crypto-subtle"] }
-openmls_basic_credential = "0.2"
-openmls_x509_credential = "0.2"
-openmls_traits = "0.2"
-# FIXME: This is being pulled only because of flaky error types from openmls
-tls_codec = { workspace = true }
-serde = "1.0"
-serde_json = "1.0"
-url = "2.3"
-async-trait = "0.1"
-async-lock = "3.3"
-schnellru = "0.2"
-zeroize = "1.5"
-wire-e2e-identity = { version = "0.9", default-features = false }
-indexmap = "2"
-x509-cert = "0.2"
-pem = "3.0"
-async-recursion = "1"
+openmls = { workspace = true, features = ["crypto-subtle"] }
+openmls_basic_credential.workspace = true
+openmls_x509_credential.workspace = true
+openmls_traits.workspace = true
+mls-crypto-provider.workspace = true
+
+tls_codec.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+async-trait.workspace = true
+async-lock.workspace = true
+schnellru.workspace = true
+zeroize.workspace = true
+wire-e2e-identity.workspace = true
+indexmap.workspace = true
+x509-cert.workspace = true
+pem.workspace = true
+async-recursion.workspace = true
 uniffi = { workspace = true, optional = true }
-itertools = "0.12"
-uuid = { version = "1.6", features = ["v4"] }
-base64 = "0.22"
-tracing = "0.1"
-
-[dependencies.proteus-wasm]
-version = "2.1"
-features = ["hazmat"]
-optional = true
-git = "https://github.com/wireapp/proteus"
-branch = "2.x"
-
-[dependencies.proteus-traits]
-optional = true
-version = "2.0"
+itertools.workspace = true
+uuid.workspace = true
+base64.workspace = true
+tracing.workspace = true
+proteus-wasm = { workspace = true, features = ["hazmat"], optional = true }
+proteus-traits = { workspace = true, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-sysinfo = { version = "0.30", default-features = false, features = ["apple-app-store"] }
-async-fs = { version = "2.0", optional = true }
-futures-lite = { version = "2.0", optional = true }
+sysinfo = { version = "0.31", default-features = false, features = ["apple-app-store", "system"] }
+async-fs = { version = "2.1", optional = true }
+futures-lite = { version = "2.3", optional = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 serde-wasm-bindgen = "0.6"
-rexie = { version = "0.4", optional = true }
-base64 = { version = "0.22", optional = true }
+rexie = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 
 [target.'cfg(not(target_os = "ios"))'.dependencies]
-core-crypto-keystore = { version = "^1.0.0-rc.60", path = "../keystore" }
+core-crypto-keystore = { workspace = true }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-core-crypto-keystore = { version = "^1.0.0-rc.60", path = "../keystore", features = ["ios-wal-compat"] }
-
-[dependencies.mls-crypto-provider]
-version = "^1.0.0-rc.60"
-path = "../mls-provider"
+core-crypto-keystore = { workspace = true, features = ["ios-wal-compat"] }
 
 [dev-dependencies]
-itertools = "0.12"
-uuid = { version = "1.0", features = ["v4", "v5"] }
-rand = "0.8"
-tempfile = "3.3"
+itertools.workspace = true
+uuid = { workspace = true, features = ["v4", "v5"] }
+rand.workspace = true
+tempfile = "3.12"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 wasm-bindgen-test = "0.3"
 js-sys = "0.3"
-rstest = "0.19"
-rstest_reuse = "0.6"
+rstest = "0.22"
+rstest_reuse = "0.7"
 pretty_env_logger = "0.5"
-async-std = { version = "1.12", features = ["attributes"] }
-futures-util = { version = "0.3", features = ["std", "alloc"] }
-proteus-traits = "2.0"
-async-trait = "0.1"
-wire-e2e-identity = { version = "0.9", features = ["identity-builder"] }
+async-std = { workspace = true, features = ["attributes"] }
+futures-util = { workspace = true, features = ["std", "alloc"] }
+proteus-traits = { workspace = true }
+async-trait.workspace = true
+wire-e2e-identity = { workspace = true, features = ["builder"] }
 fluvio-wasm-timer = "0.2"
 time = { version = "0.3", features = ["wasm-bindgen"] }
-
-[dev-dependencies.core-crypto-keystore]
-version = "^1.0.0-rc.60"
-path = "../keystore"
-features = ["dummy-entity"]
+core-crypto-keystore = { workspace = true, features = ["dummy-entity"] }
+core-crypto-attributes = { workspace = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-cryptobox = { git = "https://github.com/wireapp/cryptobox", tag = "v1.0.3" }
-proteus = { git = "https://github.com/wireapp//proteus", branch = "otak/fix-1.0.3" }
+cryptobox = { git = "https://github.com/wireapp/cryptobox" }
+proteus = { git = "https://github.com/wireapp/proteus", branch = "otak/fix-1.0.3" }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies.criterion]
 version = "0.5"
 features = ["async_std", "html_reports"]
-
-[dev-dependencies.core-crypto-attributes]
-version = "^1.0.0-rc.60"
-path = "../crypto-attributes"
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Os", "--enable-mutable-globals", "--enable-threads", "--detect-features"]

@@ -285,7 +285,7 @@ impl MlsRotateBundle {
         let key_package_refs_to_remove = self
             .key_package_refs_to_remove
             .into_iter()
-            // TODO: add a method for taking ownership in HashReference
+            // TODO: add a method for taking ownership in HashReference. Tracking issue: WPB-9593
             .map(|r| r.as_slice().to_vec())
             .collect::<Vec<_>>();
         Ok((
@@ -298,7 +298,8 @@ impl MlsRotateBundle {
 }
 
 #[cfg(test)]
-pub mod tests {
+// This is pub(crate) because failsafe_ctx() is used in other modules
+pub(crate) mod tests {
     use std::collections::HashSet;
 
     use openmls::prelude::SignaturePublicKey;
@@ -318,14 +319,14 @@ pub mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    pub mod all {
+    pub(crate) mod all {
         use openmls_traits::types::SignatureScheme;
 
         use crate::test_utils::central::TEAM;
 
         use super::*;
 
-        pub async fn failsafe_ctx(
+        pub(crate) async fn failsafe_ctx(
             ctxs: &mut [&mut ClientContext],
             sc: SignatureScheme,
         ) -> std::sync::Arc<Option<X509TestChain>> {
@@ -357,7 +358,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn enrollment_should_rotate_all(case: TestCase) {
+        async fn enrollment_should_rotate_all(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob", "charlie"],
@@ -408,35 +409,6 @@ pub mod tests {
                             .unwrap()
                             .clone();
 
-                        const NEW_HANDLE: &str = "new_alice_wire";
-                        const NEW_DISPLAY_NAME: &str = "New Alice Smith";
-
-                        fn init(wrapper: E2eiInitWrapper) -> InitFnReturn<'_> {
-                            Box::pin(async move {
-                                let E2eiInitWrapper { cc, case } = wrapper;
-                                let cs = case.ciphersuite();
-                                match case.credential_type {
-                                    MlsCredentialType::Basic => cc.e2ei_new_activation_enrollment(
-                                        NEW_DISPLAY_NAME.to_string(),
-                                        NEW_HANDLE.to_string(),
-                                        Some(TEAM.to_string()),
-                                        E2EI_EXPIRY,
-                                        cs,
-                                    ),
-                                    MlsCredentialType::X509 => {
-                                        cc.e2ei_new_rotate_enrollment(
-                                            Some(NEW_DISPLAY_NAME.to_string()),
-                                            Some(NEW_HANDLE.to_string()),
-                                            Some(TEAM.to_string()),
-                                            E2EI_EXPIRY,
-                                            cs,
-                                        )
-                                        .await
-                                    }
-                                }
-                            })
-                        }
-
                         let is_renewal = case.credential_type == MlsCredentialType::X509;
 
                         let (mut enrollment, cert) = e2ei_enrollment(
@@ -445,7 +417,7 @@ pub mod tests {
                             x509_test_chain,
                             None,
                             is_renewal,
-                            init,
+                            init_activation_or_rotation,
                             noop_restore,
                         )
                         .await
@@ -590,7 +562,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn should_restore_credentials_in_order(case: TestCase) {
+        async fn should_restore_credentials_in_order(case: TestCase) {
             run_test_with_client_ids(case.clone(), ["alice"], move |[mut alice_central]| {
                 Box::pin(async move {
                     let x509_test_chain_arc = failsafe_ctx(&mut [&mut alice_central], case.signature_scheme()).await;
@@ -615,35 +587,6 @@ pub mod tests {
                     // we only have a precision of 1 second for the `created_at` field of the Credential
                     async_std::task::sleep(core::time::Duration::from_secs(1)).await;
 
-                    const NEW_HANDLE: &str = "new_alice_wire";
-                    const NEW_DISPLAY_NAME: &str = "New Alice Smith";
-
-                    fn init(wrapper: E2eiInitWrapper) -> InitFnReturn<'_> {
-                        Box::pin(async move {
-                            let E2eiInitWrapper { cc, case } = wrapper;
-                            let cs = case.ciphersuite();
-                            match case.credential_type {
-                                MlsCredentialType::Basic => cc.e2ei_new_activation_enrollment(
-                                    NEW_DISPLAY_NAME.to_string(),
-                                    NEW_HANDLE.to_string(),
-                                    Some(TEAM.to_string()),
-                                    E2EI_EXPIRY,
-                                    cs,
-                                ),
-                                MlsCredentialType::X509 => {
-                                    cc.e2ei_new_rotate_enrollment(
-                                        Some(NEW_DISPLAY_NAME.to_string()),
-                                        Some(NEW_HANDLE.to_string()),
-                                        Some(TEAM.to_string()),
-                                        E2EI_EXPIRY,
-                                        cs,
-                                    )
-                                    .await
-                                }
-                            }
-                        })
-                    }
-
                     let is_renewal = case.credential_type == MlsCredentialType::X509;
 
                     let (mut enrollment, cert) = e2ei_enrollment(
@@ -652,7 +595,7 @@ pub mod tests {
                         x509_test_chain,
                         None,
                         is_renewal,
-                        init,
+                        init_activation_or_rotation,
                         noop_restore,
                     )
                     .await
@@ -756,7 +699,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn rotate_should_roundtrip(case: TestCase) {
+        async fn rotate_should_roundtrip(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob"],
@@ -915,7 +858,7 @@ pub mod tests {
         }
     }
 
-    pub mod one {
+    mod one {
         use super::*;
 
         #[apply(all_cred_cipher)]
@@ -1100,7 +1043,7 @@ pub mod tests {
 
                             let final_count = alice_central.mls_central.count_entities().await;
                             assert_eq!(init_count.encryption_keypair, final_count.encryption_keypair);
-                            // TODO: there is no efficient way to clean a credential when alice merges her pending commit.
+                            // TODO: there is no efficient way to clean a credential when alice merges her pending commit. Tracking issue: WPB-9594
                             // One option would be to fetch all conversations and see if Alice is never represented with the said Credential
                             // but let's be honest this is not very efficient.
                             // The other option would be to get rid of having an implicit KeyPackage for the creator of a conversation

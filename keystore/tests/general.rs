@@ -20,7 +20,7 @@ pub use rstest_reuse::{self, *};
 mod common;
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
 
     use crate::common::*;
     use wasm_bindgen_test::*;
@@ -41,7 +41,7 @@ pub mod tests {
         store1.close().await.unwrap();
         let store2 = setup("ios-wal-compat-2", true).await;
         store2.close().await.unwrap();
-        let store1 = setup("ios-wal-compat", false).await;
+        let _store1 = setup("ios-wal-compat", false).await;
     }
 
     #[cfg(target_family = "wasm")]

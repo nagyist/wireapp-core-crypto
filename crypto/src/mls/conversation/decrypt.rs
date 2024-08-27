@@ -8,6 +8,7 @@
 //! | 0 pend. Proposal  | ✅              | ✅              |
 //! | 1+ pend. Proposal | ✅              | ✅              |
 
+use openmls::prelude::StageCommitError;
 use openmls::{
     framing::errors::{MessageDecryptionError, SecretTreeError},
     group::StagedCommit,
@@ -112,7 +113,7 @@ impl MlsConversation {
     /// see [MlsCentral::decrypt_message]
     #[allow(clippy::too_many_arguments)]
     #[cfg_attr(test, crate::durable)]
-    // FIXME: this might be causing stack overflow. Retry when this is solved: https://github.com/tokio-rs/tracing/issues/1147
+    // FIXME: this might be causing stack overflow. Retry when this is solved: https://github.com/tokio-rs/tracing/issues/1147. Tracking issue: WPB-9654
     // #[cfg_attr(not(test), tracing::instrument(err, skip_all))]
     pub async fn decrypt_message(
         &mut self,
@@ -123,13 +124,17 @@ impl MlsConversation {
         callbacks: Option<&dyn CoreCryptoCallbacks>,
         restore_pending: bool,
     ) -> CryptoResult<MlsConversationDecryptMessage> {
-        // handles the crooked case where we receive our own commits.
-        // Since this would result in an error in openmls, we handle it here
-        if let Some(ct) = self.maybe_self_member_commit(&message)? {
-            return self.handle_self_member_commit(backend, ct).await;
-        }
-
-        let message = self.parse_message(backend, message).await?;
+        let message = match self.parse_message(backend, message.clone()).await {
+            // Handles the case where we receive our own commits.
+            Err(CryptoError::MlsError(MlsError::MlsMessageError(ProcessMessageError::InvalidCommit(
+                StageCommitError::OwnCommit,
+            )))) => {
+                let ct = self.extract_confirmation_tag_from_own_commit(&message)?;
+                return self.handle_own_commit(backend, ct).await;
+            }
+            Ok(processed_message) => Ok(processed_message),
+            Err(e) => Err(e),
+        }?;
 
         let credential = message.credential();
 
@@ -353,7 +358,7 @@ impl MlsConversation {
             )
             .await;
             if state != E2eiConversationState::Verified {
-                // FIXME: Uncomment when PKI env can be seeded - the computation is still done to assess performance and impact of the validations
+                // FIXME: Uncomment when PKI env can be seeded - the computation is still done to assess performance and impact of the validations. Tracking issue: WPB-9665
                 // return Err(CryptoError::InvalidCertificateChain);
             }
         }
@@ -415,7 +420,7 @@ impl MlsCentral {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use wasm_bindgen_test::*;
 
     use crate::{
@@ -429,7 +434,7 @@ pub mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    pub mod is_active {
+    mod is_active {
         use super::*;
 
         #[apply(all_cred_cipher)]
@@ -504,7 +509,7 @@ pub mod tests {
         }
     }
 
-    pub mod commit {
+    mod commit {
         use super::*;
 
         #[apply(all_cred_cipher)]
@@ -974,7 +979,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn should_not_return_sender_client_id(case: TestCase) {
+        async fn should_not_return_sender_client_id(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob"],
@@ -1013,12 +1018,12 @@ pub mod tests {
         }
     }
 
-    pub mod external_proposal {
+    mod external_proposal {
         use super::*;
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn can_decrypt_external_proposal(case: TestCase) {
+        async fn can_decrypt_external_proposal(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob", "alice2"],
@@ -1072,7 +1077,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn cannot_decrypt_proposal_no_callback(case: TestCase) {
+        async fn cannot_decrypt_proposal_no_callback(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob", "alice2"],
@@ -1128,7 +1133,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn cannot_decrypt_proposal_validation(case: TestCase) {
+        async fn cannot_decrypt_proposal_validation(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob", "alice2"],
@@ -1188,13 +1193,13 @@ pub mod tests {
         }
     }
 
-    pub mod proposal {
+    mod proposal {
         use super::*;
 
         // Ensures decrypting an proposal is durable
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn can_decrypt_proposal(case: TestCase) {
+        async fn can_decrypt_proposal(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob", "charlie"],
@@ -1263,7 +1268,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn should_not_return_sender_client_id(case: TestCase) {
+        async fn should_not_return_sender_client_id(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob"],
@@ -1302,12 +1307,12 @@ pub mod tests {
         }
     }
 
-    pub mod app_message {
+    mod app_message {
         use super::*;
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn can_decrypt_app_message(case: TestCase) {
+        async fn can_decrypt_app_message(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob"],
@@ -1350,7 +1355,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn cannot_decrypt_app_message_after_rejoining(case: TestCase) {
+        async fn cannot_decrypt_app_message_after_rejoining(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob"],
@@ -1397,7 +1402,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn cannot_decrypt_app_message_from_future_epoch(case: TestCase) {
+        async fn cannot_decrypt_app_message_from_future_epoch(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob"],
@@ -1448,7 +1453,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn can_decrypt_app_message_in_any_order(mut case: TestCase) {
+        async fn can_decrypt_app_message_in_any_order(mut case: TestCase) {
             // otherwise the test would fail because we decrypt messages in reverse order which is
             // kinda dropping them
             case.cfg.custom.maximum_forward_distance = 0;
@@ -1499,7 +1504,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn returns_sender_client_id(case: TestCase) {
+        async fn returns_sender_client_id(case: TestCase) {
             run_test_with_client_ids(
                 case.clone(),
                 ["alice", "bob"],
@@ -1536,12 +1541,12 @@ pub mod tests {
         }
     }
 
-    pub mod epoch_sync {
+    mod epoch_sync {
         use super::*;
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn should_throw_specialized_error_when_epoch_too_old(mut case: TestCase) {
+        async fn should_throw_specialized_error_when_epoch_too_old(mut case: TestCase) {
             case.cfg.custom.out_of_order_tolerance = 0;
             run_test_with_client_ids(
                 case.clone(),
@@ -1619,7 +1624,7 @@ pub mod tests {
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
-        pub async fn should_throw_specialized_error_when_epoch_desynchronized(mut case: TestCase) {
+        async fn should_throw_specialized_error_when_epoch_desynchronized(mut case: TestCase) {
             case.cfg.custom.out_of_order_tolerance = 0;
             run_test_with_client_ids(
                 case.clone(),

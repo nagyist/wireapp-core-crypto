@@ -138,10 +138,10 @@ impl Client {
     }
 }
 
-// TODO: ensure certificate signature must match the group's ciphersuite ; fails otherwise.
+// TODO: ensure certificate signature must match the group's ciphersuite ; fails otherwise. Tracking issue: WPB-9632
 // Requires more than 1 ciphersuite supported at the moment.
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use mls_crypto_provider::PkiKeypair;
     use std::collections::HashMap;
     use wasm_bindgen_test::*;
@@ -294,7 +294,10 @@ pub mod tests {
     #[apply(all_cred_cipher)]
     #[wasm_bindgen_test]
     async fn should_not_fail_but_degrade_when_certificate_expired(case: TestCase) {
-        if case.is_x509() {
+        if !case.is_x509() {
+            return;
+        }
+        Box::pin(async move {
             let mut x509_test_chain = X509TestChain::init_empty(case.signature_scheme());
 
             let expiration_time = core::time::Duration::from_secs(14);
@@ -325,13 +328,17 @@ pub mod tests {
                 alice_central.e2ei_conversation_state(&id).await.unwrap(),
                 E2eiConversationState::NotVerified
             );
-        }
+        })
+        .await;
     }
 
     #[apply(all_cred_cipher)]
     #[wasm_bindgen_test]
     async fn should_not_fail_but_degrade_when_basic_joins(case: TestCase) {
-        if case.is_x509() {
+        if !case.is_x509() {
+            return;
+        }
+        Box::pin(async {
             let mut x509_test_chain = X509TestChain::init_empty(case.signature_scheme());
 
             let (alice_identifier, _) = x509_test_chain.issue_simple_certificate_bundle("alice", None);
@@ -412,7 +419,8 @@ pub mod tests {
                 alice_central.e2ei_conversation_state(&id).await.unwrap(),
                 E2eiConversationState::NotVerified
             );
-        }
+        })
+        .await;
     }
 
     #[apply(all_cred_cipher)]
@@ -460,7 +468,7 @@ pub mod tests {
     //     wire_e2e_identity::prelude::OffsetDateTime::from_unix_timestamp(now_since_epoch).unwrap()
     // }
 
-    pub fn now_std() -> std::time::Duration {
+    pub(crate) fn now_std() -> std::time::Duration {
         let now = fluvio_wasm_timer::SystemTime::now();
         now.duration_since(fluvio_wasm_timer::UNIX_EPOCH).unwrap()
     }

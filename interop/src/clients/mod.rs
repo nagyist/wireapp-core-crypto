@@ -18,12 +18,12 @@
 use color_eyre::eyre::Result;
 use core_crypto::prelude::MlsCiphersuite;
 
-pub mod corecrypto;
+pub(crate) mod corecrypto;
 #[cfg(feature = "proteus")]
-pub mod cryptobox;
+pub(crate) mod cryptobox;
 
 bitflags::bitflags! {
-    pub struct EmulatedClientProtocol: u8 {
+    pub(crate) struct EmulatedClientProtocol: u8 {
         const MLS = 0x01;
         const PROTEUS = 0x02;
     }
@@ -32,14 +32,14 @@ bitflags::bitflags! {
 #[derive(Debug)]
 #[non_exhaustive]
 #[allow(dead_code)]
-pub enum EmulatedClientType {
+pub(crate) enum EmulatedClientType {
     Native,
     // Natively test the FFI in `generic.rs`
     NativeFfi,
     Web,
-    // TODO: Bind with & drive iOS Emulator
+    // TODO: Bind with & drive iOS Emulator. Tracking issue: WPB-9646
     AppleiOS,
-    // TODO: Bind with & drive Android Emulator
+    // TODO: Bind with & drive Android Emulator. Tracking issue: WPB-9646
     Android,
 }
 
@@ -59,7 +59,7 @@ impl std::fmt::Display for EmulatedClientType {
 
 #[async_trait::async_trait(?Send)]
 #[allow(dead_code)]
-pub trait EmulatedClient {
+pub(crate) trait EmulatedClient {
     fn client_name(&self) -> &str;
     fn client_type(&self) -> EmulatedClientType;
     fn client_id(&self) -> &[u8];
@@ -69,19 +69,19 @@ pub trait EmulatedClient {
 
 #[async_trait::async_trait(?Send)]
 #[allow(dead_code)]
-pub trait EmulatedMlsClient: EmulatedClient {
+pub(crate) trait EmulatedMlsClient: EmulatedClient {
     async fn get_keypackage(&mut self) -> Result<Vec<u8>>;
     async fn add_client(&mut self, conversation_id: &[u8], kp: &[u8]) -> Result<Vec<u8>>;
     async fn kick_client(&mut self, conversation_id: &[u8], client_id: &[u8]) -> Result<Vec<u8>>;
     async fn process_welcome(&mut self, welcome: &[u8]) -> Result<Vec<u8>>;
     async fn encrypt_message(&mut self, conversation_id: &[u8], message: &[u8]) -> Result<Vec<u8>>;
-    // TODO: Make it more complex so that we can extract other things like proposals etc
+    // TODO: Make it more complex so that we can extract other things like proposals etc. Tracking issue: WPB-9647
     async fn decrypt_message(&mut self, conversation_id: &[u8], message: &[u8]) -> Result<Option<Vec<u8>>>;
 }
 
 #[async_trait::async_trait(?Send)]
 #[allow(dead_code)]
-pub trait EmulatedProteusClient: EmulatedClient {
+pub(crate) trait EmulatedProteusClient: EmulatedClient {
     async fn init(&mut self) -> Result<()> {
         Ok(())
     }
@@ -95,6 +95,6 @@ pub trait EmulatedProteusClient: EmulatedClient {
 
 #[async_trait::async_trait(?Send)]
 #[allow(dead_code)]
-pub trait EmulatedE2eIdentityClient: EmulatedClient {
+pub(crate) trait EmulatedE2eIdentityClient: EmulatedClient {
     async fn e2ei_new_enrollment(&mut self, ciphersuite: MlsCiphersuite) -> Result<()>;
 }

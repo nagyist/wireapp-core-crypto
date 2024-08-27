@@ -2,7 +2,7 @@
 name = "mls-crypto-provider"
 description = "MLS Crypto Provider wrapping core-crypto-keystore"
 repository = "https://github.com/wireapp/core-crypto"
-version = "1.0.0-rc.60"
+version = "1.0.2"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
@@ -16,51 +16,51 @@ default = []
 raw-rand-access = [] # TESTING ONLY
 
 [dependencies]
-openmls_traits = "0.2"
-async-trait = "0.1"
-tls_codec = { workspace = true }
+openmls_traits.workspace = true
+async-trait.workspace = true
+tls_codec.workspace = true
 aes-gcm = "0.10"
-sha1 = "0.10"
-sha2 = { version = "0.10", features = ["oid"] }
+sha1.workspace = true
+sha2 = { workspace = true, features = ["oid"] }
 chacha20poly1305 = "0.10"
 hmac = "0.12"
 ed25519-dalek = { version = "2.1", features = ["pkcs8"] }
-signature = "2.1"
+signature = "2.2"
 ecdsa = { version = "0.16", features = ["der", "pkcs8"] }
 p256 = { version = "0.13", features = ["pkcs8"] }
 p384 = { version = "0.13", features = ["pkcs8"] }
 p521 = { version = "0.13", features = ["pkcs8"] }
 hkdf = "0.12"
 spki = { version = "0.7", features = ["pem", "fingerprint"] }
-x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
-wire-e2e-identity = { version = "0.9", default-features = false }
+x509-cert = { workspace = true, features = ["builder", "hazmat"] }
+wire-e2e-identity = { workspace = true }
 fluvio-wasm-timer = "0.2"
-rand = { version = "0.8", features = ["getrandom"] }
+rand = { workspace = true, features = ["getrandom"] }
 getrandom = { version = "0.2", features = ["js"] }
 rand_core = "0.6"
 rand_chacha = "0.3"
-zeroize = "1.5"
-thiserror = "1.0"
-hex = "0.4"
-async-lock = "3.3"
+zeroize.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+async-lock.workspace = true
 
 [dependencies.hpke]
-version = "0.11"
-features = ["x25519", "p256", "p384", "p521", "xyber768d00"]
+version = "0.12"
+features = ["x25519", "p256", "p384", "p521"]
 
 [target.'cfg(not(target_os = "ios"))'.dependencies]
-core-crypto-keystore = { version = "^1.0.0-rc.60", path = "../keystore" }
+core-crypto-keystore.workspace = true
 
 [target.'cfg(target_os = "ios")'.dependencies]
-core-crypto-keystore = { version = "^1.0.0-rc.60", path = "../keystore", features = ["ios-wal-compat"] }
+core-crypto-keystore = { workspace = true, features = ["ios-wal-compat"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
-uuid = { version = "1.0", features = ["v4", "js"] }
-openmls = { version = "1", default-features = false }
-rstest = "0.19"
-rstest_reuse = "0.6"
-async-std = { version = "1.12", features = ["attributes"] }
-cfg-if = "1.0"
+uuid = { workspace = true, features = ["v4", "js"] }
+openmls.workspace = true
+rstest = "0.22"
+rstest_reuse = "0.7"
+async-std = { workspace = true, features = ["attributes"] }
+cfg-if.workspace = true
 hex-literal = "0.4"
-mls-crypto-provider = { path = ".", features = ["raw-rand-access"] }
+mls-crypto-provider = { workspace = true, features = ["raw-rand-access"] }

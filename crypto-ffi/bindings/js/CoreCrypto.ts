@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see http://www.gnu.org/licenses/.
 
-import type * as CoreCryptoFfiTypes from "./wasm/core-crypto-ffi.d.ts";
+import * as CoreCryptoFfiTypes from "./wasm/core-crypto-ffi.d.js";
 import initWasm, {
     CoreCrypto as CoreCryptoFfi,
     ConversationConfiguration as ConversationConfigurationFfi,
@@ -145,11 +145,6 @@ export enum Ciphersuite {
      * DH KEM P384 | AES-GCM 256 | SHA2-384 | EcDSA P384
      */
     MLS_256_DHKEMP384_AES256GCM_SHA384_P384 = 0x0007,
-
-    /**
-     *  x25519Kyber768Draft00 Hybrid KEM | AES-GCM 128 | SHA2-256 | Ed25519
-     */
-    MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519 = 0xf031,
 }
 
 export enum CredentialType {
@@ -872,9 +867,10 @@ export interface CoreCryptoCallbacks {
 export interface CoreCryptoLogger {
     /**
      * This method will be called by Core Crypto to log messages. It is up to the implementer to decide how to handle the message and where to actually log it.
-     * @param msg - message to log
+     * @param level - the level of the logged message. it will also be present in the json message
+     * @param json_msg - message to log in json format
      **/
-    log: (msg: string) => void;
+    log: (level: CoreCryptoLogLevel, json_msg: string) => void;
 }
 
 /**
@@ -887,6 +883,22 @@ export enum CoreCryptoLogLevel {
     Info = 4,
     Warn = 5,
     Error = 6,
+}
+/**
+ * Initializes the global logger for Core Crypto and registers the callback. Can be called only once
+ * @param logger - the interface to be called when something is going to be logged
+ * @param level - the max level that should be logged
+ **/
+export function initLogger(
+    logger: CoreCryptoLogger,
+    level: CoreCryptoLogLevel,
+    ctx: any = null
+): void {
+    const wasmLogger = new CoreCryptoWasmLogger(logger.log, ctx);
+    CoreCryptoFfiTypes.set_logger(
+        wasmLogger,
+        normalizeEnum(CoreCryptoLogLevel, level)
+    );
 }
 
 /**
@@ -1115,18 +1127,6 @@ export class CoreCrypto {
         }
     }
 
-    registerLogger(
-        logger: CoreCryptoLogger,
-        level: CoreCryptoLogLevel,
-        ctx: any = null
-    ): void {
-        const wasmLogger = new CoreCryptoWasmLogger(logger.log, ctx);
-        this.#cc.set_logger(
-            wasmLogger,
-            normalizeEnum(CoreCryptoLogLevel, level)
-        );
-    }
-
     /**
      * Checks if the Client is member of a given conversation and if the MLS Group is loaded up
      *
@@ -1188,7 +1188,9 @@ export class CoreCrypto {
      *
      * @returns the ciphersuite of the conversation
      */
-    async conversationCiphersuite(conversationId: ConversationId): Promise<Ciphersuite> {
+    async conversationCiphersuite(
+        conversationId: ConversationId
+    ): Promise<Ciphersuite> {
         return await CoreCryptoError.asyncMapErr(
             this.#cc.conversation_ciphersuite(conversationId)
         );

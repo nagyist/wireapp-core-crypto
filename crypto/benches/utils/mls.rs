@@ -21,7 +21,7 @@ use mls_crypto_provider::MlsCryptoProvider;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[allow(non_camel_case_types)]
-pub enum MlsTestCase {
+pub(crate) enum MlsTestCase {
     Basic_Ciphersuite1,
     #[cfg(feature = "test-all-cipher")]
     Basic_Ciphersuite2,
@@ -29,12 +29,10 @@ pub enum MlsTestCase {
     Basic_Ciphersuite3,
     #[cfg(feature = "test-all-cipher")]
     Basic_Ciphersuite7,
-    #[cfg(any(feature = "test-all-cipher", feature = "test-pq-cipher"))]
-    Basic_PostQuantum,
 }
 
 impl MlsTestCase {
-    pub fn get(&self) -> (Self, MlsCiphersuite, Option<CertificateBundle>) {
+    pub(crate) fn get(&self) -> (Self, MlsCiphersuite, Option<CertificateBundle>) {
         match self {
             MlsTestCase::Basic_Ciphersuite1 => (
                 *self,
@@ -55,16 +53,10 @@ impl MlsTestCase {
             MlsTestCase::Basic_Ciphersuite7 => {
                 (*self, Ciphersuite::MLS_256_DHKEMP384_AES256GCM_SHA384_P384.into(), None)
             }
-            #[cfg(any(feature = "test-all-cipher", feature = "test-pq-cipher"))]
-            MlsTestCase::Basic_PostQuantum => (
-                *self,
-                Ciphersuite::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519.into(),
-                None,
-            ),
         }
     }
 
-    pub fn values() -> impl Iterator<Item = (Self, MlsCiphersuite, Option<CertificateBundle>, bool)> {
+    pub(crate) fn values() -> impl Iterator<Item = (Self, MlsCiphersuite, Option<CertificateBundle>, bool)> {
         [
             MlsTestCase::Basic_Ciphersuite1,
             #[cfg(feature = "test-all-cipher")]
@@ -73,8 +65,6 @@ impl MlsTestCase {
             MlsTestCase::Basic_Ciphersuite3,
             #[cfg(feature = "test-all-cipher")]
             MlsTestCase::Basic_Ciphersuite7,
-            #[cfg(any(feature = "test-all-cipher", feature = "test-pq-cipher"))]
-            MlsTestCase::Basic_PostQuantum,
         ]
         .into_iter()
         .map(|v| v.get())
@@ -89,11 +79,11 @@ impl MlsTestCase {
         })
     }
 
-    pub fn benchmark_id(&self, i: usize, in_memory: bool) -> BenchmarkId {
+    pub(crate) fn benchmark_id(&self, i: usize, in_memory: bool) -> BenchmarkId {
         BenchmarkId::new(self.ciphersuite_name(in_memory), i)
     }
 
-    pub const fn ciphersuite_name(&self, in_memory: bool) -> &'static str {
+    pub(crate) const fn ciphersuite_name(&self, in_memory: bool) -> &'static str {
         match (self, in_memory) {
             (MlsTestCase::Basic_Ciphersuite1, true) => "cs1/mem",
             #[cfg(feature = "test-all-cipher")]
@@ -109,10 +99,6 @@ impl MlsTestCase {
             (MlsTestCase::Basic_Ciphersuite3, false) => "cs3/db",
             #[cfg(feature = "test-all-cipher")]
             (MlsTestCase::Basic_Ciphersuite7, false) => "cs7/db",
-            #[cfg(any(feature = "test-all-cipher", feature = "test-pq-cipher"))]
-            (MlsTestCase::Basic_PostQuantum, true) => "pq/mem",
-            #[cfg(any(feature = "test-all-cipher", feature = "test-pq-cipher"))]
-            (MlsTestCase::Basic_PostQuantum, false) => "pq/db",
         }
     }
 }
@@ -127,13 +113,11 @@ impl Display for MlsTestCase {
             MlsTestCase::Basic_Ciphersuite3 => write!(f, "cs3"),
             #[cfg(feature = "test-all-cipher")]
             MlsTestCase::Basic_Ciphersuite7 => write!(f, "cs7"),
-            #[cfg(any(feature = "test-all-cipher", feature = "test-pq-cipher"))]
-            MlsTestCase::Basic_PostQuantum => write!(f, "pq"),
         }
     }
 }
 
-pub async fn setup_mls(
+pub(crate) async fn setup_mls(
     ciphersuite: MlsCiphersuite,
     credential: Option<&CertificateBundle>,
     in_memory: bool,
@@ -155,9 +139,9 @@ pub async fn setup_mls(
     (central, id)
 }
 
-pub async fn new_central(
+pub(crate) async fn new_central(
     ciphersuite: MlsCiphersuite,
-    // TODO: always None for the moment. Need to update the benches with some realistic certificates
+    // TODO: always None for the moment. Need to update the benches with some realistic certificates. Tracking issue: WPB-9589
     _credential: Option<&CertificateBundle>,
     in_memory: bool,
 ) -> (MlsCentral, tempfile::TempDir) {
@@ -182,7 +166,7 @@ pub async fn new_central(
     (central, tmp_file)
 }
 
-pub fn tmp_db_file() -> (String, tempfile::TempDir) {
+pub(crate) fn tmp_db_file() -> (String, tempfile::TempDir) {
     let tmp_dir = tempfile::tempdir().unwrap();
     let path = tmp_dir.path().join("store.edb");
     std::fs::File::create(&path).unwrap();
@@ -190,12 +174,12 @@ pub fn tmp_db_file() -> (String, tempfile::TempDir) {
     (path, tmp_dir)
 }
 
-pub fn conversation_id() -> ConversationId {
+pub(crate) fn conversation_id() -> ConversationId {
     let uuid = uuid::Uuid::new_v4();
     ConversationId::from(format!("{}@conversations.wire.com", uuid.hyphenated()))
 }
 
-pub async fn add_clients(
+pub(crate) async fn add_clients(
     central: &mut MlsCentral,
     id: &ConversationId,
     ciphersuite: MlsCiphersuite,
@@ -222,7 +206,7 @@ pub async fn add_clients(
     (client_ids, group_info)
 }
 
-pub async fn rand_key_package(ciphersuite: MlsCiphersuite) -> (KeyPackage, ClientId) {
+pub(crate) async fn rand_key_package(ciphersuite: MlsCiphersuite) -> (KeyPackage, ClientId) {
     let client_id = Alphanumeric
         .sample_string(&mut rand::thread_rng(), 16)
         .as_bytes()
@@ -250,7 +234,12 @@ pub async fn rand_key_package(ciphersuite: MlsCiphersuite) -> (KeyPackage, Clien
     (kp, client_id.into())
 }
 
-pub async fn invite(from: &mut MlsCentral, other: &mut MlsCentral, id: &ConversationId, ciphersuite: MlsCiphersuite) {
+pub(crate) async fn invite(
+    from: &mut MlsCentral,
+    other: &mut MlsCentral,
+    id: &ConversationId,
+    ciphersuite: MlsCiphersuite,
+) {
     let other_kps = other
         .get_or_create_client_keypackages(ciphersuite, MlsCredentialType::Basic, 1)
         .await

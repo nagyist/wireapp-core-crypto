@@ -14,10 +14,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see http://www.gnu.org/licenses/.
 
-use crate::prelude::{
+pub use crate::prelude::{
     MlsCiphersuite, MlsConversationConfiguration, MlsCredentialType, MlsCustomConfiguration, MlsWirePolicy,
 };
-use openmls_traits::types::SignatureScheme;
+pub use openmls_traits::types::SignatureScheme;
 pub use rstest::*;
 pub use rstest_reuse::{self, *};
 
@@ -71,16 +71,6 @@ pub use rstest_reuse::{self, *};
     case::cert_cs7(TestCase::new(
         crate::prelude::MlsCredentialType::X509,
         openmls::prelude::Ciphersuite::MLS_256_DHKEMP384_AES256GCM_SHA384_P384
-    )),
-    #[cfg(any(feature = "test-all-cipher", feature = "test-pq-cipher"))]
-    case::basic_cs_pq(TestCase::new(
-        crate::prelude::MlsCredentialType::Basic,
-        openmls::prelude::Ciphersuite::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519
-    )),
-    #[cfg(any(feature = "test-all-cipher", feature = "test-pq-cipher"))]
-    case::cert_cs_pq(TestCase::new(
-        crate::prelude::MlsCredentialType::X509,
-        openmls::prelude::Ciphersuite::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519
     )),
     case::pure_ciphertext(TestCase {
         credential_type: crate::prelude::MlsCredentialType::Basic,

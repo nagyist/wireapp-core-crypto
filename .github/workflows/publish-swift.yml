@@ -1,7 +1,7 @@
 name: Publish Swift package
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: "${{ github.workflow }}-${{ github.ref }}"
 
 on:
   push:
@@ -15,8 +15,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
 
 jobs:
   publish-swift:
@@ -28,12 +26,10 @@ jobs:
           xcode-version: '14.3.1'
       - uses: actions/checkout@v4
       - name: "Setup rust"
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
           rustflags: ''
           target: "aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim"
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - name: Setup cargo-make
         uses: davidB/rust-cargo-make@v1
       - name: Build xcframework
@@ -41,6 +37,6 @@ jobs:
           cd crypto-ffi
           cargo make ios-create-xcframework
       - name: Upload xcframework
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
             files: crypto-ffi/bindings/swift/WireCoreCrypto.xcframework.zip

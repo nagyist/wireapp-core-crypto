@@ -323,7 +323,7 @@ impl ProteusCentral {
             let pk = identity.pk_raw();
             // SAFETY: Byte lengths are ensured at the keystore level so this function is safe to call, despite being cursed
 
-            unsafe { IdentityKeyPair::from_raw_key_pair(*sk, *pk).map_err(ProteusError::from)? }
+            IdentityKeyPair::from_raw_key_pair(*sk, *pk).map_err(ProteusError::from)?
         } else {
             Self::create_identity(keystore).await?
         };
@@ -667,10 +667,10 @@ impl ProteusCentral {
         let prekey_dir = root_dir.join("prekeys");
 
         let mut identity = if let Some(store_kp) = keystore.find::<ProteusIdentity>(&[]).await? {
-            Some(unsafe {
+            Some(Box::new(
                 IdentityKeyPair::from_raw_key_pair(*store_kp.sk_raw(), *store_kp.pk_raw())
-                    .map_err(ProteusError::from)?
-            })
+                    .map_err(ProteusError::from)?,
+            ))
         } else {
             let identity_dir = root_dir.join("identities");
 
@@ -680,7 +680,7 @@ impl ProteusCentral {
             let identity_check = if legacy_identity.exists() {
                 let kp_cbor = async_fs::read(&legacy_identity).await?;
                 let kp = IdentityKeyPair::deserialise(&kp_cbor).map_err(ProteusError::from)?;
-                Some((kp, true))
+                Some((Box::new(kp), true))
             } else if identity.exists() {
                 let kp_cbor = async_fs::read(&identity).await?;
                 let kp = proteus_wasm::identity::Identity::deserialise(&kp_cbor).map_err(ProteusError::from)?;
@@ -716,6 +716,7 @@ impl ProteusCentral {
         let Some(identity) = identity.take() else {
             return Err(crate::CryptoboxMigrationError::IdentityNotFound(path.into()).into());
         };
+        let identity = *identity;
 
         use futures_lite::stream::StreamExt as _;
         // Session migration
@@ -823,10 +824,10 @@ impl ProteusCentral {
         }
 
         let mut proteus_identity = if let Some(store_kp) = keystore.find::<ProteusIdentity>(&[]).await? {
-            Some(unsafe {
+            Some(
                 proteus_wasm::keys::IdentityKeyPair::from_raw_key_pair(*store_kp.sk_raw(), *store_kp.pk_raw())
-                    .map_err(ProteusError::from)?
-            })
+                    .map_err(ProteusError::from)?,
+            )
         } else {
             let transaction = db
                 .transaction(&[local_identity_store_name], TransactionMode::ReadOnly)
@@ -837,7 +838,7 @@ impl ProteusCentral {
                 .map_err(CryptoboxMigrationError::from)?;
 
             if let Some(cryptobox_js_value) = identity_store
-                .get(&local_identity_key.into())
+                .get(local_identity_key.into())
                 .await
                 .map_err(CryptoboxMigrationError::from)?
             {
@@ -876,7 +877,7 @@ impl ProteusCentral {
                 .map_err(CryptoboxMigrationError::from)?;
 
             let sessions = sessions_store
-                .get_all(None, None, None, None)
+                .scan(None, None, None, None)
                 .await
                 .map_err(CryptoboxMigrationError::from)?;
 
@@ -915,7 +916,7 @@ impl ProteusCentral {
                 .map_err(CryptoboxMigrationError::from)?;
 
             let prekeys = prekeys_store
-                .get_all(None, None, None, None)
+                .scan(None, None, None, None)
                 .await
                 .map_err(CryptoboxMigrationError::from)?;
 
@@ -1333,24 +1334,8 @@ mod tests {
         if #[cfg(all(feature = "cryptobox-migrate", target_family = "wasm"))] {
             // use wasm_bindgen::prelude::*;
             const CRYPTOBOX_JS_DBNAME: &str = "cryptobox-migrate-test";
-            // FIXME: This is not working because wasm-bindgen-test-runner is behaving weird with inline_js stuff (aka not working basically)
-    //         #[allow(dead_code)]
-    //         const CRYPTOBOX_JS_SETUP: &str = r#"export async function run_cryptobox() {
-    //     const { Cryptobox } = await import("https://unpkg.com/@wireapp/cryptobox@latest/src/index.js");
-    //     const { IndexedDBEngine } = await import("https://unpkg.com/@wireapp/store-engine-dexie@latest/src/index.js");
-    //     const store = new IndexedDBEngine();
-    //     await store.init("cryptobox-migrate-test", true);
-    //     const cryptobox = new Cryptobox(store);
-    //     await cryptobox.create();
-    //     window.cryptobox = cryptobox;
-    //     return cryptobox.getIdentity().fingerprint();
-    // }"#;
-    //         #[wasm_bindgen(inline_js = CRYPTOBOX_JS_SETUP)]
-    //         extern "C" {
-    //             fn run_cryptobox() -> js_sys::Promise;
-    //         }
-
-            // ! So instead we emulate how cryptobox-js works
+            // wasm-bindgen-test-runner is behaving weird with inline_js stuff (aka not working basically), which we had previously
+            // So instead we emulate how cryptobox-js works
             // Returns Promise<JsString>
             fn run_cryptobox(alice: CryptoboxLike) -> js_sys::Promise {
                 wasm_bindgen_futures::future_to_promise(async move {
@@ -1360,7 +1345,7 @@ mod tests {
                     // Delete the maybe past database to make sure we start fresh
                     Rexie::builder(CRYPTOBOX_JS_DBNAME)
                         .delete()
-                        .await?;
+                        .await.map_err(|err| err.to_string())?;
 
                     let rexie = Rexie::builder(CRYPTOBOX_JS_DBNAME)
                         .version(1)
@@ -1368,11 +1353,11 @@ mod tests {
                         .add_object_store(ObjectStore::new("prekeys").auto_increment(false))
                         .add_object_store(ObjectStore::new("sessions").auto_increment(false))
                         .build()
-                        .await?;
+                        .await.map_err(|err| err.to_string())?;
 
                     // Add identity key
-                    let transaction = rexie.transaction(&["keys"], TransactionMode::ReadWrite)?;
-                    let store = transaction.store("keys")?;
+                    let transaction = rexie.transaction(&["keys"], TransactionMode::ReadWrite).map_err(|err| err.to_string())?;
+                    let store = transaction.store("keys").map_err(|err| err.to_string())?;
 
                     use base64::Engine as _;
                     let json = serde_json::json!({
@@ -1383,11 +1368,11 @@ mod tests {
                     });
                     let js_value = serde_wasm_bindgen::to_value(&json)?;
 
-                    store.add(&js_value, Some(&JsValue::from_str("local_identity"))).await?;
+                    store.add(&js_value, Some(&JsValue::from_str("local_identity"))).await.map_err(|err| err.to_string())?;
 
                     // Add prekeys
-                    let transaction = rexie.transaction(&["prekeys"], TransactionMode::ReadWrite)?;
-                    let store = transaction.store("prekeys")?;
+                    let transaction = rexie.transaction(&["prekeys"], TransactionMode::ReadWrite).map_err(|err| err.to_string())?;
+                    let store = transaction.store("prekeys").map_err(|err| err.to_string())?;
                     for prekey in alice.prekeys.0.into_iter() {
                         let id = prekey.key_id.value().to_string();
                         let json = serde_json::json!({
@@ -1397,12 +1382,12 @@ mod tests {
                             "version": "1.0"
                         });
                         let js_value = serde_wasm_bindgen::to_value(&json)?;
-                        store.add(&js_value, Some(&JsValue::from_str(&id))).await?;
+                        store.add(&js_value, Some(&JsValue::from_str(&id))).await.map_err(|err| err.to_string())?;
                     }
 
                     // Add sessions
-                    let transaction = rexie.transaction(&["sessions"], TransactionMode::ReadWrite)?;
-                    let store = transaction.store("sessions")?;
+                    let transaction = rexie.transaction(&["sessions"], TransactionMode::ReadWrite).map_err(|err| err.to_string())?;
+                    let store = transaction.store("sessions").map_err(|err| err.to_string())?;
                     for (session_id, session) in alice.sessions.into_iter() {
                         let json = serde_json::json!({
                             "created": 0,
@@ -1412,7 +1397,7 @@ mod tests {
                         });
 
                         let js_value = serde_wasm_bindgen::to_value(&json)?;
-                        store.add(&js_value, Some(&JsValue::from_str(&session_id))).await?;
+                        store.add(&js_value, Some(&JsValue::from_str(&session_id))).await.map_err(|err| err.to_string())?;
                     }
 
                     Ok(JsValue::UNDEFINED)

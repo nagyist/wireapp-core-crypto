@@ -30,7 +30,7 @@ use core_crypto::{
     },
     MlsError,
 };
-use tracing::level_filters::LevelFilter;
+use tracing::{level_filters::LevelFilter, Level};
 use tracing_subscriber::fmt::{self, MakeWriter};
 
 use crate::UniffiCustomTypeConverter;
@@ -94,8 +94,6 @@ pub enum CiphersuiteName {
     MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448 = 0x0006,
     /// DH KEM P384 | AES-GCM 256 | SHA2-384 | EcDSA P384
     MLS_256_DHKEMP384_AES256GCM_SHA384_P384 = 0x0007,
-    /// x25519Kyber768Draft00 Hybrid KEM | AES-GCM 128 | SHA2-256 | Ed25519
-    MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519 = 0xf031,
 }
 
 #[derive(Debug, Clone)]
@@ -297,7 +295,6 @@ pub enum MlsRatchetTreeType {
     /// Contains `GroupInfo` changes since previous epoch (not yet implemented)
     /// (see [draft](https://github.com/rohan-wire/ietf-drafts/blob/main/mahy-mls-ratchet-tree-delta/draft-mahy-mls-ratchet-tree-delta.md))
     Delta = 2,
-    /// TODO: to define
     ByRef = 3,
 }
 
@@ -703,8 +700,8 @@ impl core_crypto::prelude::CoreCryptoCallbacks for CoreCryptoCallbacksWrapper {
     }
 }
 
-/// This only exists to create a sync interface to our internal async callback interface
-// TODO: Remove this once UniFFI supports async callbacks
+/// This is needed instead of the original trait ([core_crypto::CoreCryptoCallbacks]) to use the
+/// custom type [ClientId], that UniFFi can handle.
 #[uniffi::export(with_foreign)]
 #[cfg_attr(target_family = "wasm", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_family = "wasm"), async_trait::async_trait)]
@@ -725,21 +722,44 @@ pub trait CoreCryptoCallbacks: std::fmt::Debug + Send + Sync {
     ) -> bool;
 }
 
+/// Initializes the logger
+/// WARNING: This is a global setting. Calling it twice will cause errors.
+#[uniffi::export]
+pub fn set_logger(logger: std::sync::Arc<dyn CoreCryptoLogger>, level: CoreCryptoLogLevel) {
+    fmt::fmt()
+        .json()
+        .with_writer(CoreCryptoLoggerWrapper { logger, level })
+        .with_max_level(LevelFilter::from(level))
+        .init()
+}
+
 /// This trait is used to provide a callback mechanism to hook up the rerspective platform logging system
 #[uniffi::export(with_foreign)]
 pub trait CoreCryptoLogger: std::fmt::Debug + Send + Sync {
     /// Function to setup a hook for the logging messages. Core Crypto will call this method
     /// whenever it needs to log a message.
-    fn log(&self, msg: String);
+    fn log(&self, level: CoreCryptoLogLevel, json_msg: String);
 }
 
-#[derive(Debug, Clone)]
-struct CoreCryptoLoggerWrapper(std::sync::Arc<dyn CoreCryptoLogger>);
+#[derive(Clone)]
+struct CoreCryptoLoggerWrapper {
+    logger: std::sync::Arc<dyn CoreCryptoLogger>,
+    level: CoreCryptoLogLevel,
+}
+
+impl CoreCryptoLoggerWrapper {
+    fn clone_with_level(&self, level: &Level) -> Self {
+        Self {
+            logger: self.logger.clone(),
+            level: level.into(),
+        }
+    }
+}
 
 impl std::io::Write for CoreCryptoLoggerWrapper {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let message = String::from_utf8_lossy(buf);
-        self.0.log(message.into_owned());
+        self.logger.log(self.level, message.into_owned());
         Ok(buf.len())
     }
 
@@ -753,6 +773,10 @@ impl MakeWriter<'_> for CoreCryptoLoggerWrapper {
 
     fn make_writer(&self) -> Self::Writer {
         self.clone()
+    }
+
+    fn make_writer_for(&'_ self, meta: &tracing::Metadata<'_>) -> Self::Writer {
+        self.clone_with_level(meta.level())
     }
 }
 
@@ -776,6 +800,18 @@ impl From<CoreCryptoLogLevel> for LevelFilter {
             CoreCryptoLogLevel::Info => LevelFilter::INFO,
             CoreCryptoLogLevel::Warn => LevelFilter::WARN,
             CoreCryptoLogLevel::Error => LevelFilter::ERROR,
+        }
+    }
+}
+
+impl From<&Level> for CoreCryptoLogLevel {
+    fn from(value: &Level) -> Self {
+        match *value {
+            Level::WARN => CoreCryptoLogLevel::Warn,
+            Level::ERROR => CoreCryptoLogLevel::Error,
+            Level::INFO => CoreCryptoLogLevel::Info,
+            Level::DEBUG => CoreCryptoLogLevel::Debug,
+            Level::TRACE => CoreCryptoLogLevel::Trace,
         }
     }
 }
@@ -940,14 +976,6 @@ impl CoreCrypto {
             .await
             .callbacks(std::sync::Arc::new(CoreCryptoCallbacksWrapper(callbacks)));
         Ok(())
-    }
-
-    /// Initializes the logger
-    pub fn set_logger(&self, logger: std::sync::Arc<dyn CoreCryptoLogger>, level: CoreCryptoLogLevel) {
-        fmt::fmt()
-            .with_max_level(LevelFilter::from(level))
-            .with_writer(CoreCryptoLoggerWrapper(logger))
-            .init()
     }
 
     /// See [core_crypto::mls::MlsCentral::client_public_key]

@@ -17,7 +17,7 @@ args = ["check"]
 
 [tasks.release-build]
 command = "cargo"
-args = ["build", "--release"]
+args = ["build", "--release", "--locked"]
 
 ##################################### DOCS ####################################
 
@@ -92,9 +92,6 @@ args = [
     "--out", "../target/doc/core_crypto_ffi/bindings/typescript"
 ]
 
-#[tasks.docs-swift]
-# TODO:
-
 ##################################### WASM ####################################
 
 [tasks.wasm-build]
@@ -102,6 +99,7 @@ command = "wasm-pack"
 # env = { "WASM_BINDGEN_WEAKREF" = 1, "WASM_BINDGEN_EXTERNREF" = 1 }
 args = [
     "build",
+    "--locked",
     "--out-dir", "bindings/js/wasm",
     "--out-name", "core-crypto-ffi",
     "--mode", "normal",
@@ -125,6 +123,7 @@ dependencies = ["release-build"]
 command = "cargo"
 args = [
     "run",
+    "--locked",
     "--features", "uniffi/cli",
     "--bin", "uniffi-bindgen",
     "generate",
@@ -145,6 +144,7 @@ dependencies = ["release-build"]
 command = "cargo"
 args = [
     "run",
+    "--locked",
     "--features", "uniffi/cli",
     "--bin", "uniffi-bindgen",
     "generate",
@@ -158,12 +158,10 @@ dependencies = ["compile-ffi-kotlin"]
 script = '''
     mv ./bindings/jvm/src/main/kotlin/com/wire/crypto/core_crypto_ffi.kt ./bindings/jvm/src/main/kotlin/com/wire/crypto/CoreCrypto.kt
 
-    sed -i.bak \
-        -e 's/\CryptoException\b/CryptoError/g' \
-        -e 's/\bE2eIdentityException\b/E2eIdentityError/g' \
+    perl -i \
+        -pe 's/\bCryptoException\b/CryptoError/g;' \
+        -pe 's/\bE2eIdentityException\b/E2eIdentityError/g;' \
         ./bindings/jvm/src/main/kotlin/uniffi/core_crypto/core_crypto.kt
-
-    rm ./bindings/jvm/src/main/kotlin/uniffi/core_crypto/core_crypto.kt.bak
 '''
 
 [tasks.ffi]
@@ -178,7 +176,7 @@ plugin = "detect-release"
 dependencies = ["ffi-swift"]
 condition = { platforms = ["mac"] }
 command = "cargo"
-args = ["rustc", "--target", "aarch64-apple-ios", "--crate-type=cdylib", "--crate-type=staticlib", "--release", "--", "-C", "strip=symbols"]
+args = ["rustc", "--target", "aarch64-apple-ios", "--crate-type=cdylib", "--crate-type=staticlib", "--release", "--locked", "--", "-C", "strip=symbols"]
 
 [tasks.ios-simulator-x86]
 dependencies = ["ffi-swift"]
@@ -186,6 +184,7 @@ condition = { platforms = ["mac"] }
 command = "cargo"
 args = [
     "rustc",
+    "--locked",
     "--target", "x86_64-apple-ios",
     "--crate-type=cdylib",
     "--crate-type=staticlib",
@@ -202,6 +201,7 @@ condition = { platforms = ["mac"] }
 command = "cargo"
 args = [
     "rustc",
+    "--locked",
     "--target", "aarch64-apple-ios-sim",
     "--crate-type=cdylib",
     "--crate-type=staticlib",
@@ -232,6 +232,7 @@ plugin = "android-env"
 command = "cargo"
 args = [
     "rustc",
+    "--locked",
     "--target", "armv7-linux-androideabi",
     "--crate-type=cdylib",
     "--crate-type=staticlib",
@@ -245,6 +246,7 @@ dependencies = ["ffi-kotlin", "android-env"]
 command = "cargo"
 args = [
     "rustc",
+    "--locked",
     "--target", "aarch64-linux-android",
     "--crate-type=cdylib",
     "--crate-type=staticlib",
@@ -258,6 +260,7 @@ dependencies = ["ffi-kotlin", "android-env"]
 command = "cargo"
 args = [
     "rustc",
+    "--locked",
     "--target", "x86_64-linux-android",
     "--crate-type=cdylib",
     "--crate-type=staticlib",
@@ -273,45 +276,20 @@ dependencies = ["ffi-kotlin", "android-env"]
 command = "cargo"
 args = [
     "rustc",
+    "--locked",
     "--target", "i686-linux-android",
     "--crate-type=cdylib",
     "--crate-type=staticlib",
     "--release",
     "--",
-    "-C", "strip=symbols"
+    "-C", "strip=symbols",
+    "-l", "static=clang_rt.builtins-i686-android",
+    "-L", "${CLANG_RT_DIR}"
 ]
 dependencies = ["ffi-kotlin", "android-env"]
 
 [tasks.android]
 dependencies = ["android-armv7", "android-armv8", "android-x86", "android-i686"]
-
-[tasks.setup-sample-project]
-dependencies = ["android"]
-script_runner = "@duckscript"
-script = '''
-handle = map
-map_put ${handle} "i686-linux-android" "x86"
-map_put ${handle} "x86_64-linux-android" "x86_64"
-map_put ${handle} "aarch64-linux-android" "arm64-v8a"
-map_put ${handle} "armv7-linux-androideabi" "armeabi-v7a"
-keys = map_keys ${handle}
-libname = set "libcore_crypto_ffi.${LIBRARY_EXTENSION}"
-for rust_target in ${keys}
-    android_target = map_get ${handle} ${rust_target}
-    println -c bright_blue "cp rust-${rust_target}/${libname} -> android-jniLibs/${android_target}/${libname}"
-    from = canonicalize "../target/${rust_target}/debug/${libname}"
-    to = canonicalize "../sample-projects/android/CoreCryptoTestApp/app/src/main/jniLibs/${android_target}/${libname}"
-    mkdir dirname ${to}
-    cp ${from} ${to}
-end
-
-release ${handle}
-
-println -c bright_blue "cp ./bindings/jvm/src/main/kotlin/com/wire/crypto/CoreCrypto.kt -> ../sample-projects/android/CoreCryptoTestApp/app/src/main/java/com/wire/core/CoreCrypto.kt"
-from = canonicalize "./bindings/jvm/src/main/kotlin/com/wire/crypto/CoreCrypto.kt"
-to = canonicalize "../sample-projects/android/CoreCryptoTestApp/app/src/main/java/com/wire/crypto/CoreCrypto.kt"
-cp ${from} ${to}
-'''
 
 ####################################  JVM  ####################################
 
@@ -319,6 +297,7 @@ cp ${from} ${to}
 command = "cargo"
 args = [
     "rustc",
+    "--locked",
     "--target", "x86_64-apple-darwin",
     "--crate-type=cdylib",
     "--crate-type=staticlib",
@@ -333,6 +312,7 @@ condition = { platforms = ["mac"] }
 command = "cargo"
 args = [
     "rustc",
+    "--locked",
     "--target", "aarch64-apple-darwin",
     "--crate-type=cdylib",
     "--crate-type=staticlib",
@@ -347,6 +327,7 @@ condition = { platforms = ["mac"] }
 command = "cargo"
 args = [
     "rustc",
+    "--locked",
     "--target", "x86_64-unknown-linux-gnu",
     "--crate-type=cdylib",
     "--crate-type=staticlib",

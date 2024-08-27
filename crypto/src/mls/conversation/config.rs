@@ -79,7 +79,6 @@ pub struct MlsConversationConfiguration {
 }
 
 impl MlsConversationConfiguration {
-    // TODO: pending a long term solution with a real certificate
     const WIRE_SERVER_IDENTITY: &'static str = "wire-server";
 
     const PADDING_SIZE: usize = 128;
@@ -98,7 +97,6 @@ impl MlsConversationConfiguration {
         Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
         Ciphersuite::MLS_256_DHKEMP384_AES256GCM_SHA384_P384,
         Ciphersuite::MLS_256_DHKEMP521_AES256GCM_SHA512_P521,
-        Ciphersuite::MLS_128_X25519KYBER768DRAFT00_AES128GCM_SHA256_Ed25519,
     ];
 
     /// Not used at the moment
@@ -155,8 +153,8 @@ impl MlsConversationConfiguration {
     }
 
     /// This supports the legacy behaviour where the server was providing the external sender public key
-    /// raw. This only supports Ed25519
-    // TODO: remove at some point when the backend API is not used anymore
+    /// raw.
+    // TODO: remove at some point when the backend API is not used anymore. Tracking issue: WPB-9614
     fn legacy_external_sender(
         key: Vec<u8>,
         signature_scheme: SignatureScheme,
@@ -177,7 +175,7 @@ impl MlsConversationConfiguration {
 /// The configuration parameters for a group/conversation which are not handled natively by openmls
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MlsCustomConfiguration {
-    // TODO: Not implemented yet
+    // TODO: Not implemented yet. Tracking issue: WPB-9609
     /// Duration in seconds after which we will automatically force a self_update commit
     pub key_rotation_span: Option<std::time::Duration>,
     /// Defines if handshake messages are encrypted or not
@@ -223,7 +221,7 @@ impl From<MlsWirePolicy> for WireFormatPolicy {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use openmls::prelude::ProtocolVersion;
     use openmls_traits::{
         crypto::OpenMlsCrypto,
