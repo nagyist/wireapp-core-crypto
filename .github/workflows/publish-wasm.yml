@@ -1,4 +1,7 @@
-name: Publish Node packages
+name: publish node packages
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
 
 on:
   push:
@@ -8,43 +11,41 @@ on:
 env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
-  RUSTFLAGS: "-D warnings -W unreachable-pub"
   RUSTUP_MAX_RETRIES: 10
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
   publish-wasm:
     if: github.repository == 'wireapp/core-crypto'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - name: force-fetch the tag to work around actions/checkout#290
+        run: git fetch -f origin ${{ github.ref }}:${{ github.ref }}
+      - name: ensure the tag is signed
+        run: git cat-file tag ${{ github.ref_name }} | grep -q -- '-----BEGIN PGP SIGNATURE-----'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          node-version: 16
-
-      - uses: dtolnay/rust-toolchain@stable
+          target: wasm32-unknown-unknown
+      - uses: oven-sh/setup-bun@v2
         with:
-          targets: wasm32-unknown-unknown
-
-      - name: Setup cargo-make
-        uses: davidB/rust-cargo-make@v1
-
-      - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
+          bun-version: latest
+      - name: install wasm-pack
+        uses: taiki-e/install-action@v2
         with:
-          version: "latest"
-
-      - name: Build WASM package
+          tool: wasm-pack
+      - uses: davidB/rust-cargo-make@v1
+      - name: build wasm
         run: |
           cd crypto-ffi
-          cargo make wasm-build
-
-      - name: Build TS/JS Library
-        run: |
-          npm install
-          npm run build
-
-      - name: Publishes package to NPM
-        uses: JS-DevTools/npm-publish@v1
+          cargo make wasm
+          cd bindings/js
+          bun run build
+      - name: publishes package to npm
+        uses: JS-DevTools/npm-publish@v3
         with:
           token: ${{ secrets.NPM_TOKEN }}
           access: public
+          package: "crypto-ffi/bindings/js/package.json"

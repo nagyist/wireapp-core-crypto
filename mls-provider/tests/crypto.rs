@@ -23,7 +23,7 @@ const LEN_RANGE: std::ops::RangeInclusive<usize> = 128..=1024;
 mod fixtures;
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use crate::fixtures::*;
     use crate::LEN_RANGE;
     use hex_literal::hex;
@@ -56,20 +56,26 @@ pub mod tests {
         ciphersuite: Ciphersuite,
         entropy_seed: Option<EntropySeed>,
     ) {
-        let mut backend = backend.await;
-        backend.reseed(entropy_seed);
+        let backend = backend.await;
+        backend.reseed(entropy_seed).unwrap();
         let len = rand::thread_rng().gen_range(LEN_RANGE);
         let crypto = backend.crypto();
         let ikm = hex!("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
         let salt = hex!("000102030405060708090a0b0c");
         let info = hex!("f0f1f2f3f4f5f6f7f8f9");
-        let prk = crypto.hkdf_extract(ciphersuite.hash_algorithm(), &salt, &ikm).unwrap();
+        let prk = crypto
+            .hkdf_extract(ciphersuite.hash_algorithm(), &salt, &ikm)
+            .unwrap()
+            .as_slice()
+            .to_vec();
         let supposed_prk_len = ciphersuite.hash_length();
         assert_eq!(prk.len(), supposed_prk_len);
 
         let okm = crypto
             .hkdf_expand(ciphersuite.hash_algorithm(), &prk, &info, len)
-            .unwrap();
+            .unwrap()
+            .as_slice()
+            .to_vec();
 
         assert_eq!(okm.len(), len);
 
@@ -83,8 +89,8 @@ pub mod tests {
         ciphersuite: Ciphersuite,
         entropy_seed: Option<EntropySeed>,
     ) {
-        let mut backend = backend.await;
-        backend.reseed(entropy_seed);
+        let backend = backend.await;
+        backend.reseed(entropy_seed).unwrap();
         let len = rand::thread_rng().gen_range(LEN_RANGE);
         let data = backend.rand().random_vec(len).unwrap();
         let crypto = backend.crypto();
@@ -102,8 +108,8 @@ pub mod tests {
         ciphersuite: Ciphersuite,
         entropy_seed: Option<EntropySeed>,
     ) {
-        let mut backend = backend.await;
-        backend.reseed(entropy_seed);
+        let backend = backend.await;
+        backend.reseed(entropy_seed).unwrap();
         let len = rand::thread_rng().gen_range(LEN_RANGE);
         let data = backend.rand().random_vec(len).unwrap();
         let aad = backend
@@ -136,13 +142,15 @@ pub mod tests {
         ciphersuite: Ciphersuite,
         entropy_seed: Option<EntropySeed>,
     ) {
-        let mut backend = backend.await;
-        backend.reseed(entropy_seed);
-        let crypto = backend.crypto();
-        let (sk, pk) = crypto.signature_key_gen(ciphersuite.signature_algorithm()).unwrap();
+        let backend = backend.await;
+        backend.reseed(entropy_seed).unwrap();
 
         let len = rand::thread_rng().gen_range(LEN_RANGE);
         let data = backend.rand().random_vec(len).unwrap();
+
+        let crypto = backend.crypto();
+        let (sk, pk) = crypto.signature_key_gen(ciphersuite.signature_algorithm()).unwrap();
+
         let signature = crypto.sign(ciphersuite.signature_algorithm(), &data, &sk).unwrap();
         crypto
             .verify_signature(ciphersuite.signature_algorithm(), &data, &pk, &signature)
@@ -158,8 +166,8 @@ pub mod tests {
         ciphersuite: Ciphersuite,
         entropy_seed: Option<EntropySeed>,
     ) {
-        let mut backend = backend.await;
-        backend.reseed(entropy_seed);
+        let backend = backend.await;
+        backend.reseed(entropy_seed).unwrap();
 
         let crypto = backend.crypto();
 
@@ -178,15 +186,19 @@ pub mod tests {
             .random_vec(rand::thread_rng().gen_range(LEN_RANGE))
             .unwrap();
 
-        let alice = crypto.derive_hpke_keypair(
-            ciphersuite.hpke_config(),
-            &backend
-                .rand()
-                .random_vec(rand::thread_rng().gen_range(LEN_RANGE))
-                .unwrap(),
-        );
+        let alice = crypto
+            .derive_hpke_keypair(
+                ciphersuite.hpke_config(),
+                &backend
+                    .rand()
+                    .random_vec(rand::thread_rng().gen_range(LEN_RANGE))
+                    .unwrap(),
+            )
+            .unwrap();
 
-        let secret_message = crypto.hpke_seal(ciphersuite.hpke_config(), &alice.public, &info, &aad, &message);
+        let secret_message = crypto
+            .hpke_seal(ciphersuite.hpke_config(), &alice.public, &info, &aad, &message)
+            .unwrap();
         let unsealed_secret_message = crypto
             .hpke_open(ciphersuite.hpke_config(), &secret_message, &alice.private, &info, &aad)
             .unwrap();
@@ -216,7 +228,7 @@ pub mod tests {
             )
             .unwrap();
 
-        assert_eq!(secret_tx, secret_rx);
+        assert_eq!(*secret_tx, *secret_rx);
 
         teardown(backend).await;
     }

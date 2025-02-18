@@ -1,47 +1,136 @@
-name: Publish docs
+name: documentation
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+
 on:
   push:
-    branches:
-    - main
 
 env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
-  RUSTFLAGS: "-D warnings -W unreachable-pub"
   RUSTUP_MAX_RETRIES: 10
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
-  docgen:
-    if: github.repository == 'wireapp/core-crypto'
+  rustdoc:
+    name: rust
     runs-on: ubuntu-latest
 
-    steps: 
-    - name: Checkout repository
-      uses: actions/checkout@v3
-
-    - uses: dtolnay/rust-toolchain@stable
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
       with:
-        targets: wasm32-unknown-unknown
+        rustflags: '-D warnings -W unreachable-pub'
+    - run: cargo doc --all --no-deps
 
-    - name: Setup cargo-make
+    - uses: actions/upload-artifact@v4.5.0
+      with:
+        name: rustdocs
+        path: target/doc
+        retention-days: 1
+        overwrite: true
+        include-hidden-files: true
+
+
+  tsdoc:
+    name: typescript
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: checkout repository
+      uses: actions/checkout@v4
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
+      with:
+        rustflags: ''
+        target: |
+          wasm32-unknown-unknown
+          x86_64-unknown-linux-gnu
+
+    - name: setup cargo-make
       uses: davidB/rust-cargo-make@v1
 
-    - name: Install wasm-pack
-      uses: jetli/wasm-pack-action@v0.4.0
+    - name: install wasm-pack
+      uses: taiki-e/install-action@v2
       with:
-        version: 'latest'
+        tool: wasm-pack
 
-    - name: Build Rust documentation
-      run: cargo doc --all --no-deps
+    - name: setup bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
 
-    - name: Build TypeScript docs
+    - name: make ts docs
       run: |
         cd crypto-ffi
-        cargo make wasm-build
         cargo make docs-ts
 
-    - name: Deploy Docs
-      uses: peaceiris/actions-gh-pages@v3
+    - uses: actions/upload-artifact@v4.5.0
+      with:
+        name: tsdoc
+        path: target/doc
+        retention-days: 1
+        overwrite: true
+        include-hidden-files: true
+
+
+  ktdoc:
+    name: kotlin
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: checkout repository
+      uses: actions/checkout@v4
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
+      with:
+        rustflags: '' # note that this is _not_ the default
+
+    - name: setup cargo-make
+      uses: davidB/rust-cargo-make@v1
+
+    - name: make kotlin docs
+      run: |
+        mkdir -p target/doc/core_crypto_ffi/bindings/kotlin
+        cd crypto-ffi
+        cargo make docs-kotlin
+
+    - uses: actions/upload-artifact@v4.5.0
+      with:
+        name: ktdoc
+        path: target/doc
+        retention-days: 1
+        overwrite: true
+        include-hidden-files: true
+
+
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    if: github.repository == 'wireapp/core-crypto' && github.ref_name == 'main'
+    needs:
+      - rustdoc
+      - tsdoc
+      - ktdoc
+
+    steps:
+    - uses: actions/download-artifact@v4.1.8
+      with:
+        pattern: "rustdocs"
+        path: target/doc
+        merge-multiple: true
+
+    - uses: actions/download-artifact@v4.1.8
+      with:
+        pattern: "*doc"
+        path: target/doc
+        merge-multiple: true
+
+    - name: deploy docs
+      uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_branch: gh-pages

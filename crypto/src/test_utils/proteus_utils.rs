@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see http://www.gnu.org/licenses/.
 
+use crate::test_utils::Result;
 use proteus_wasm::{
     keys::{IdentityKeyPair, PreKey},
     session::Session,
@@ -41,7 +42,7 @@ impl CryptoboxLike {
     }
 
     pub fn new_prekey(&mut self) -> proteus_wasm::keys::PreKeyBundle {
-        let prekey_id = (self.prekeys.len() + 1 % u16::MAX as usize) as u16;
+        let prekey_id = ((self.prekeys.len() + 1) % u16::MAX as usize) as u16;
         let prekey = proteus_wasm::keys::PreKey::new(proteus_wasm::keys::PreKeyId::new(prekey_id));
         let prekey_bundle = proteus_wasm::keys::PreKeyBundle::new(self.identity.public_key.clone(), &prekey);
         self.prekeys.push(prekey);
@@ -103,11 +104,24 @@ impl std::ops::DerefMut for PrekeyStore {
     }
 }
 
-#[async_trait::async_trait(?Send)]
-impl proteus_traits::PreKeyStore for PrekeyStore {
-    type Error = ();
+#[derive(Debug)]
+pub struct DummyError(());
 
-    async fn prekey(&mut self, id: proteus_traits::RawPreKeyId) -> Result<Option<proteus_traits::RawPreKey>, ()> {
+impl proteus_traits::ProteusErrorCode for DummyError {
+    fn code(&self) -> proteus_traits::ProteusErrorKind {
+        proteus_traits::ProteusErrorKind::Unknown
+    }
+}
+
+#[cfg_attr(target_family = "wasm", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_family = "wasm"), async_trait::async_trait)]
+impl proteus_traits::PreKeyStore for PrekeyStore {
+    type Error = DummyError;
+
+    async fn prekey(
+        &mut self,
+        id: proteus_traits::RawPreKeyId,
+    ) -> Result<Option<proteus_traits::RawPreKey>, Self::Error> {
         if let Some(prekey) = self.0.iter().find(|k| k.key_id.value() == id) {
             Ok(Some(prekey.serialise().unwrap()))
         } else {
@@ -115,7 +129,7 @@ impl proteus_traits::PreKeyStore for PrekeyStore {
         }
     }
 
-    async fn remove(&mut self, id: proteus_traits::RawPreKeyId) -> Result<(), ()> {
+    async fn remove(&mut self, id: proteus_traits::RawPreKeyId) -> Result<(), Self::Error> {
         self.0
             .iter()
             .position(|k| k.key_id.value() == id)

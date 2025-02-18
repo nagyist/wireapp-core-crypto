@@ -14,11 +14,18 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see http://www.gnu.org/licenses/.
 
-use crate::{connection::DatabaseConnection, CryptoKeystoreResult};
-use rexie::{Index, ObjectStore};
+use crate::connection::platform::wasm::migrations::open_and_migrate;
+use crate::{
+    connection::{DatabaseConnection, DatabaseConnectionRequirements},
+    CryptoKeystoreResult,
+};
+use idb::{Factory, TransactionMode};
 
+mod migrations;
+pub use migrations::keystore_v_1_0_0;
 pub mod storage;
-use self::storage::{WasmEncryptedStorage, WasmStorageWrapper};
+
+use self::storage::{WasmEncryptedStorage, WasmStorageTransaction, WasmStorageWrapper};
 
 #[derive(Debug)]
 pub struct WasmConnection {
@@ -34,30 +41,28 @@ impl WasmConnection {
     pub fn storage_mut(&mut self) -> &mut WasmEncryptedStorage {
         &mut self.conn
     }
+
+    // for compatibility with the uniffi version
+    pub async fn conn(&self) -> TransactionCreator {
+        TransactionCreator { conn: &self.conn }
+    }
 }
 
-#[async_trait::async_trait(?Send)]
-impl DatabaseConnection for WasmConnection {
+impl DatabaseConnectionRequirements for WasmConnection {}
+
+#[cfg_attr(target_family = "wasm", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_family = "wasm"), async_trait::async_trait)]
+impl<'a> DatabaseConnection<'a> for WasmConnection {
+    type Connection = &'a WasmEncryptedStorage;
+
     async fn open(name: &str, key: &str) -> CryptoKeystoreResult<Self> {
         let name = name.to_string();
         // ? Maybe find a cleaner way to define the schema
-        let rexie_builder = rexie::Rexie::builder(&name)
-            .version(1)
-            .add_object_store(ObjectStore::new("mls_keys").auto_increment(false))
-            .add_object_store(
-                ObjectStore::new("mls_identities")
-                    .auto_increment(false)
-                    .add_index(Index::new("signature", "signature").unique(true)),
-            )
-            .add_object_store(ObjectStore::new("mls_groups").auto_increment(false))
-            .add_object_store(ObjectStore::new("mls_pending_groups").auto_increment(false))
-            .add_object_store(ObjectStore::new("proteus_prekeys").auto_increment(false))
-            .add_object_store(ObjectStore::new("proteus_identities").auto_increment(false))
-            .add_object_store(ObjectStore::new("proteus_sessions").auto_increment(false));
 
-        let rexie = rexie_builder.build().await?;
+        let idb = open_and_migrate(&name, key).await?;
 
-        let storage = WasmStorageWrapper::Persistent(rexie);
+        let storage = WasmStorageWrapper::Persistent(idb);
+
         let conn = WasmEncryptedStorage::new(key, storage);
 
         Ok(Self { name, conn })
@@ -81,9 +86,35 @@ impl DatabaseConnection for WasmConnection {
         self.conn.close()?;
 
         if is_persistent {
-            let _ = rexie::Rexie::builder(&self.name).delete().await?;
+            let factory = Factory::new()?;
+            factory.delete(&self.name)?.await?;
         }
 
         Ok(())
+    }
+}
+
+/// A connection reference which can create a new transaction.
+///
+/// This is kind of weird but it's necessary for interop with the generic/uniffi side.
+pub struct TransactionCreator<'a> {
+    conn: &'a WasmEncryptedStorage,
+}
+
+impl TransactionCreator<'_> {
+    pub async fn new_transaction(
+        &mut self,
+        tables: &[impl AsRef<str>],
+    ) -> CryptoKeystoreResult<WasmStorageTransaction<'_>> {
+        match &self.conn.storage {
+            WasmStorageWrapper::Persistent(db) => Ok(WasmStorageTransaction::Persistent {
+                tx: db.transaction(tables, TransactionMode::ReadWrite)?,
+                cipher: &self.conn.cipher,
+            }),
+            WasmStorageWrapper::InMemory(db) => Ok(WasmStorageTransaction::InMemory {
+                db: db.clone(),
+                cipher: &self.conn.cipher,
+            }),
+        }
     }
 }

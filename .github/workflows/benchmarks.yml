@@ -1,0 +1,68 @@
+name: continuous benchmarks with bencher
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  benchmarks_with_bencher:
+    name: rust benchmarks with bencher
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust_bench: [ "commit", "encryption", "key_package", "create_group", "mls_proteus", "transaction" ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
+      - uses: actions/checkout@v4
+      - name: run bencher cli
+        uses: ./.github/actions/run-bencher
+        with:
+          bencher-api-token: ${{ secrets.BENCHER_API_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          adapter: rust_criterion
+          bench-command: cargo bench --bench ${{ matrix.rust_bench }} -- --quick
+
+  web_benchmarks_with_bencher:
+    name: web benchmarks with bencher
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - uses: davidB/rust-cargo-make@v1
+      - name: build wasm
+        run: |
+          cd crypto-ffi
+          cargo make wasm
+      - name: bench wasm/js
+        run: |
+          cd crypto-ffi/bindings/js
+          bun install
+          bun run build
+          bun run bench
+      - uses: actions/checkout@v4
+        with:
+          # Keep result file
+          clean: 'false'
+      - name: run bencher cli
+        uses: ./.github/actions/run-bencher
+        with:
+          bencher-api-token: ${{ secrets.BENCHER_API_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          directory: ${{ github.workspace }}/crypto-ffi/bindings/js
+          adapter: json
+          # No bench command, as we run the bench before calling bencher CLI.
+          bench-command:
+          bench-results-file-name: web_benchmark_results.json

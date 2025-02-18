@@ -16,17 +16,18 @@
 
 use crate::clients::{EmulatedClient, EmulatedClientProtocol, EmulatedClientType, EmulatedProteusClient};
 use color_eyre::eyre::Result;
+use std::cell::Cell;
 use std::net::SocketAddr;
 
 #[derive(Debug)]
-pub struct CryptoboxWebClient {
+pub(crate) struct CryptoboxWebClient {
     browser: fantoccini::Client,
     client_id: uuid::Uuid,
-    prekey_last_id: u16,
+    prekey_last_id: Cell<u16>,
 }
 
 impl CryptoboxWebClient {
-    pub async fn new(driver_addr: &SocketAddr) -> Result<Self> {
+    pub(crate) async fn new(driver_addr: &SocketAddr) -> Result<Self> {
         let client_id = uuid::Uuid::new_v4();
         let browser = crate::build::web::webdriver::setup_browser(driver_addr, "cryptobox").await?;
 
@@ -34,7 +35,7 @@ impl CryptoboxWebClient {
             browser,
             client_id,
             #[cfg(feature = "proteus")]
-            prekey_last_id: 0,
+            prekey_last_id: Cell::new(0),
         })
     }
 }
@@ -91,8 +92,8 @@ callback();"#,
         Ok(())
     }
 
-    async fn get_prekey(&mut self) -> Result<Vec<u8>> {
-        self.prekey_last_id += 1;
+    async fn get_prekey(&self) -> Result<Vec<u8>> {
+        self.prekey_last_id.replace(self.prekey_last_id.get() + 1);
 
         let json_response = self
             .browser
@@ -102,16 +103,17 @@ const [prekeyId, callback] = arguments;
 const [prekey] = await window.cbox.new_prekeys(prekeyId, 1);
 const { key } = window.cbox.serialize_prekey(prekey);
 callback(key);"#,
-                vec![self.prekey_last_id.into()],
+                vec![self.prekey_last_id.get().into()],
             )
             .await?;
 
         let key_b64 = json_response.as_str().unwrap();
 
-        Ok(base64::decode(key_b64)?)
+        use base64::Engine as _;
+        Ok(base64::prelude::BASE64_STANDARD.decode(key_b64)?)
     }
 
-    async fn session_from_prekey(&mut self, session_id: &str, prekey: &[u8]) -> Result<()> {
+    async fn session_from_prekey(&self, session_id: &str, prekey: &[u8]) -> Result<()> {
         self.browser
             .execute_async(
                 r#"
@@ -126,7 +128,7 @@ callback();"#,
         Ok(())
     }
 
-    async fn session_from_message(&mut self, session_id: &str, message: &[u8]) -> Result<Vec<u8>> {
+    async fn session_from_message(&self, session_id: &str, message: &[u8]) -> Result<Vec<u8>> {
         Ok(self
             .browser
             .execute_async(
@@ -141,7 +143,7 @@ callback(cleartext);"#,
             .and_then(|value| Ok(serde_json::from_value(value)?))?)
     }
 
-    async fn encrypt(&mut self, session_id: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
+    async fn encrypt(&self, session_id: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
         Ok(self
             .browser
             .execute_async(
@@ -156,7 +158,7 @@ callback(new Uint8Array(encrypted));"#,
             .and_then(|value| Ok(serde_json::from_value(value)?))?)
     }
 
-    async fn decrypt(&mut self, session_id: &str, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    async fn decrypt(&self, session_id: &str, ciphertext: &[u8]) -> Result<Vec<u8>> {
         Ok(self
             .browser
             .execute_async(

@@ -2,8 +2,8 @@
 name = "mls-crypto-provider"
 description = "MLS Crypto Provider wrapping core-crypto-keystore"
 repository = "https://github.com/wireapp/core-crypto"
-version = "0.6.0-rc.3"
-edition = "2018"
+version = "4.1.0"
+edition = "2021"
 license = "GPL-3.0-only"
 publish = false
 
@@ -11,43 +11,59 @@ publish = false
 name = "mls_crypto_provider"
 crate-type = ["lib", "cdylib"]
 
+[lints]
+workspace = true
+
 [features]
 default = []
 raw-rand-access = [] # TESTING ONLY
 
 [dependencies]
-openmls_traits = { version = "0.1", features = ["single-threaded"] }
+openmls_traits.workspace = true
+async-trait.workspace = true
+tls_codec.workspace = true
 aes-gcm = "0.10"
-sha2 = "0.10"
+sha1.workspace = true
+sha2 = { workspace = true, features = ["oid"] }
 chacha20poly1305 = "0.10"
 hmac = "0.12"
-ed25519-dalek = "1.0"
-ecdsa = { version = "0.14", features = ["der"] }
-p256 = "0.11"
-p384 = "0.11"
-# TODO: Uncomment this once p521 crate is ready
-# p521 = { version = "0.11", git = "https://github.com/RustCrypto/elliptic-curves", package = "p521" }
+ed25519-dalek = { version = "2.1", features = ["pkcs8"] }
+signature = "2.2"
+ecdsa = { version = "0.16", features = ["der", "pkcs8"] }
+p256 = { version = "0.13", features = ["pkcs8"] }
+p384 = { version = "0.13", features = ["pkcs8"] }
+p521 = { version = "0.13", features = ["pkcs8"] }
 hkdf = "0.12"
-rand = { version = "0.8", features = ["getrandom"] }
+spki = { version = "0.7", features = ["pem", "fingerprint"] }
+x509-cert = { workspace = true, features = ["builder", "hazmat"] }
+wire-e2e-identity = { workspace = true }
+web-time = "1.1.0"
+rand = { workspace = true, features = ["getrandom"] }
 getrandom = { version = "0.2", features = ["js"] }
+rand_core = "0.6"
 rand_chacha = "0.3"
-hpke = { version = "0.1", package = "hpke-rs", default-features = false, features = ["hazmat", "serialization"] }
-hpke-rs-crypto = "0.1"
-hpke-rs-rust-crypto = "0.1"
-zeroize = "1.5"
-thiserror = "1.0"
+zeroize.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+async-lock.workspace = true
 
-[dependencies.core-crypto-keystore]
-version = "0.6.0-rc.3"
-path = "../keystore"
+[dependencies.hpke]
+version = "0.12"
+features = ["x25519", "p256", "p384", "p521"]
+
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+core-crypto-keystore.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+core-crypto-keystore = { workspace = true, features = ["ios-wal-compat"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
-uuid = { version = "1.0", features = ["v4", "js"] }
-openmls = { version = "0.4", default-features = false }
-rstest = "0.16"
-rstest_reuse = "0.4"
-async-std = { version = "1.12", features = ["attributes"] }
-cfg-if = "1.0"
-hex-literal = "0.3"
-mls-crypto-provider = { path = ".", features = ["raw-rand-access"] }
+uuid = { workspace = true, features = ["v4", "js"] }
+openmls.workspace = true
+rstest = "0.24"
+rstest_reuse = "0.7"
+async-std = { workspace = true, features = ["attributes"] }
+cfg-if.workspace = true
+hex-literal = "0.4"
+mls-crypto-provider = { workspace = true, features = ["raw-rand-access"] }

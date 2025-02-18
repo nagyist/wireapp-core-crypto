@@ -1,163 +1,167 @@
-name: Rust compile & test
+name: rust
 
-on: [push]
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
-  fmt:
-    runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
-
   check:
     runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check
-      - run: cargo check --benches
+    strategy:
+      fail-fast: false
+      matrix:
+        tool:
+          - name: fmt
+            trailer: --all -- --check
+          - name: clippy
+            trailer: -- -D warnings
+          - name: check
+            trailer: --tests
+        target: ["", "--target wasm32-unknown-unknown"]
+        exclude:
+          - {tool: {name: fmt},
+             target: "--target wasm32-unknown-unknown"}
 
-  build:
-    runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --verbose
-      - run: cargo clippy -- -D warnings
+          components: rustfmt, clippy
+          rustflags: ''
+          target: wasm32-unknown-unknown
+      - run: cargo ${{ matrix.tool.name }} ${{ matrix.target }} ${{ matrix.tool.trailer }}
 
   test:
     runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
+        with:
+          rustflags: ''
       - uses: taiki-e/install-action@nextest
-      - name: "Test CoreCrypto"
-        run: cargo nextest run --verbose --release
-      - name: "Test CoreCrypto documentation"
+      - name: "test corecrypto"
+        run: cargo nextest run --verbose
+      - name: "test corecrypto documentation"
         run: cargo test --doc
+      - name: "upload test results"
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/nextest/default/junit.xml
+
+  test-keystore-regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
+        with:
+          rustflags: ''
+      - name: "test keystore regressions"
+        run: |
+          cd extras/keystore-regression-versions
+          cargo run
 
   proteus-test:
     runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
-      - name: "Test CoreCrypto's proteus implementation"
-        run: cargo nextest run --verbose --features proteus,cryptobox-migrate,proteus-keystore proteus
-
-  # extract things unrelated to main tests not to slow them down
-  tooling-test:
-    runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
-      - name: "Test CoreCrypto xtask tooling"
-        run: cargo nextest run --verbose --manifest-path xtask/Cargo.toml
-      - name: "Test CoreCrypto benchmarks"
-        run: sh crypto/benches/scripts/test.sh
-
-  wasm-build:
-    runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
-    strategy:
-      matrix:
-        workspace: [ "crypto", "keystore", "mls-provider" ]
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
-          targets: wasm32-unknown-unknown
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - uses: Swatinem/rust-cache@v2
-      - name: WASM build
-        run: wasm-pack build --dev --target web ${{ matrix.workspace }}
+          rustflags: ''
+      - uses: taiki-e/install-action@nextest
+      - name: "test corecrypto's proteus implementation"
+        run: cargo nextest run --verbose --features proteus,cryptobox-migrate,proteus-keystore proteus
 
   wasm-test:
     runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
     strategy:
       matrix:
-        workspace: ["crypto", "keystore", "mls-provider"]
+        crate_paths: [ "keystore", "mls-provider" ]
     steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
-          targets: wasm32-unknown-unknown
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - uses: Swatinem/rust-cache@v2
-      - name: Run tests (wasm)
-        run: wasm-pack test --release --headless --chrome ${{ matrix.workspace }}
+          target: wasm32-unknown-unknown
+          rustflags: ''
+      - uses: browser-actions/setup-chrome@latest
+        id: setup-chrome
+        with:
+          chrome-version: stable
+      - run: |
+          echo "CHROME_PATH=${{ steps.setup-chrome.outputs.chrome-path }}" >> $GITHUB_ENV
+      - name: install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: run tests (wasm)
+        run: wasm-pack test --headless --chrome ./${{ matrix.crate_paths }}
+
+  # TODO: pending a proper solution to fix the size limit for WASM tests. Tracking issue: WPB-9581
+  wasm-core-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
+        with:
+          target: wasm32-unknown-unknown
+          rustflags: ''
+      - uses: browser-actions/setup-chrome@latest
+        id: setup-chrome
+        with:
+          chrome-version: stable
+      - run: |
+          echo "CHROME_PATH=${{ steps.setup-chrome.outputs.chrome-path }}" >> $GITHUB_ENV
+      - name: install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: run core tests (wasm)
+        run: sh crypto-ffi/bindings/js/test/wasm-tests.sh
 
   proteus-wasm-test:
     runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
         with:
-          targets: wasm32-unknown-unknown
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - uses: Swatinem/rust-cache@v2
-      - name: Run tests (wasm)
+          target: wasm32-unknown-unknown
+          rustflags: ''
+      - uses: browser-actions/setup-chrome@latest
+        id: setup-chrome
+        with:
+          chrome-version: stable
+      - run: |
+          echo "CHROME_PATH=${{ steps.setup-chrome.outputs.chrome-path }}" >> $GITHUB_ENV
+      - name: install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: run tests (wasm)
         run: |
-          wasm-pack test --chrome --headless keystore --features proteus-keystore -- proteus
-          wasm-pack test --chrome --headless crypto --features proteus,cryptobox-migrate -- proteus
-
-  e2e-interop-test:
-    runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - name: Setup cargo-make
-        uses: davidB/rust-cargo-make@v1
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - uses: Swatinem/rust-cache@v2
-      - name: Run E2E interop test
-        run: cargo run --bin interop
+          wasm-pack test --headless --chrome ./keystore -F "proteus-keystore" -- proteus
+          wasm-pack test --headless --chrome ./crypto -F "proteus,cryptobox-migrate" -- proteus
 
   hack:
     runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
+        with:
+          rustflags: ''
       - uses: taiki-e/install-action@cargo-hack
-      - uses: Swatinem/rust-cache@v2
       - name: cargo/hack (verify features compile in isolation)
-        run: cargo hack check --each-feature --no-dev-deps
+        run: cargo hack check --each-feature --exclude-features uniffi --no-dev-deps

@@ -1,4 +1,7 @@
-name: Publish Swift package
+name: publish swift package
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
 
 on:
   push:
@@ -8,41 +11,36 @@ on:
 env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
-  RUSTFLAGS: "-D warnings -W unreachable-pub"
   RUSTUP_MAX_RETRIES: 10
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
   publish-swift:
     if: github.repository == 'wireapp/core-crypto'
-    runs-on: macos-latest
+    runs-on: macos-13
     steps:
-      - uses: actions/checkout@v3
-      - name: "Setup rust"
-        uses: dtolnay/rust-toolchain@stable
+      - uses: maxim-lobanov/setup-xcode@v1
         with:
-          targets: "aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim"
-      - name: Setup cargo-make
+          xcode-version: '14.3.1'
+      - uses: actions/checkout@v4
+      - name: force-fetch the tag to work around actions/checkout#290
+        run: git fetch -f origin ${{ github.ref }}:${{ github.ref }}
+      - name: ensure the tag is signed
+        run: git cat-file tag ${{ github.ref_name }} | grep -q -- '-----BEGIN PGP SIGNATURE-----'
+      - name: "setup rust"
+        uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
+        with:
+          rustflags: ''
+          target: "aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim"
+      - name: setup cargo-make
         uses: davidB/rust-cargo-make@v1
-
-      - name: Build and Publish Swift package
-        env:
-          GIT_SSH_COMMAND: "ssh -i /Users/runner/.ssh/id_rsa -o UserKnownHostsFile=/Users/runner/.ssh/known_hosts"
+      - name: build xcframework
         run: |
-          export SEMANTIC_VERSION=$(echo $GITHUB_REF_NAME | sed 's/^v\(.*\)/\1/')
-          mkdir -p /Users/runner/.ssh
-          echo "${{ secrets.SSH_DEPLOY_KEY }}" > /Users/runner/.ssh/id_rsa
-          chmod 600 /Users/runner/.ssh/id_rsa
           cd crypto-ffi
-          ssh-keyscan -H github.com > /Users/runner/.ssh/known_hosts
-          cargo make create-swift-package
-          cd ../../
-          git clone git@github.com:wireapp/core-crypto-swift.git
-          cd core-crypto-swift
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          cp -r ../core-crypto/crypto-ffi/bindings/swift/* ./
-          git add .
-          git commit -m "chore: release of core-crypto $GITHUB_REF_NAME"
-          git tag $SEMANTIC_VERSION
-          git push origin main
-          git push origin $SEMANTIC_VERSION
+          cargo make ios-create-xcframework
+      - name: upload xcframework
+        uses: softprops/action-gh-release@v2
+        with:
+            files: crypto-ffi/bindings/swift/WireCoreCrypto.xcframework.zip

@@ -14,5 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see http://www.gnu.org/licenses/.
 
-pub mod native;
-pub mod web;
+pub(crate) mod ffi;
+pub(crate) mod native;
+pub(crate) mod web;
+
+pub(crate) mod ios;

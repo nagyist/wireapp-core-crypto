@@ -16,30 +16,64 @@
 
 //! Primitives to export data from a group, such as derived keys and client ids.
 
-use mls_crypto_provider::MlsCryptoProvider;
-
-use crate::mls::{client::ClientId, ConversationId, CryptoError, CryptoResult, MlsCentral, MlsConversation, MlsError};
+use super::Result;
+use crate::{
+    context::CentralContext,
+    mls::{client::id::ClientId, ConversationId, MlsCentral, MlsConversation},
+    MlsError, RecursiveError,
+};
 
 impl MlsConversation {
-    const EXPORTER_LABEL: &str = "exporter";
-    // TODO: check if this can be a constant or if we need to pass the group state
-    const EXPORTER_CONTEXT: &[u8] = &[];
+    const EXPORTER_LABEL: &'static str = "exporter";
+    const EXPORTER_CONTEXT: &'static [u8] = &[];
 
     /// See [MlsCentral::export_secret_key]
-    pub fn export_secret_key(&self, backend: &MlsCryptoProvider, key_length: usize) -> CryptoResult<Vec<u8>> {
+    pub fn export_secret_key(
+        &self,
+        backend: &impl openmls_traits::OpenMlsCryptoProvider,
+        key_length: usize,
+    ) -> Result<Vec<u8>> {
         self.group
             .export_secret(backend, Self::EXPORTER_LABEL, Self::EXPORTER_CONTEXT, key_length)
-            .map_err(MlsError::from)
-            .map_err(CryptoError::from)
+            .map_err(MlsError::wrap("exporting secret key"))
+            .map_err(Into::into)
     }
 
     /// See [MlsCentral::get_client_ids]
     pub fn get_client_ids(&self) -> Vec<ClientId> {
         self.group
             .members()
-            .iter()
-            .map(|kp| ClientId::from(kp.credential().identity()))
+            .map(|kp| ClientId::from(kp.credential.identity()))
             .collect()
+    }
+}
+
+impl CentralContext {
+    /// See [MlsCentral::export_secret_key]
+    #[cfg_attr(test, crate::idempotent)]
+    pub async fn export_secret_key(&self, conversation_id: &ConversationId, key_length: usize) -> Result<Vec<u8>> {
+        self.get_conversation(conversation_id)
+            .await?
+            .read()
+            .await
+            .export_secret_key(
+                &self
+                    .mls_provider()
+                    .await
+                    .map_err(RecursiveError::root("getting mls provider"))?,
+                key_length,
+            )
+    }
+
+    /// See [MlsCentral::get_client_ids]
+    #[cfg_attr(test, crate::idempotent)]
+    pub async fn get_client_ids(&self, conversation_id: &ConversationId) -> Result<Vec<ClientId>> {
+        Ok(self
+            .get_conversation(conversation_id)
+            .await?
+            .read()
+            .await
+            .get_client_ids())
     }
 }
 
@@ -49,12 +83,14 @@ impl MlsCentral {
     /// # Arguments
     /// * `conversation_id` - the group/conversation id
     /// * `key_length` - the length of the key to be derived. If the value is higher than the
-    /// bounds of `u16` or the context hash * 255, an error will be returned
+    ///     bounds of `u16` or the context hash * 255, an error will be returned
     ///
     /// # Errors
     /// OpenMls secret generation error or conversation not found
-    pub fn export_secret_key(&self, conversation_id: &ConversationId, key_length: usize) -> CryptoResult<Vec<u8>> {
-        self.get_conversation(conversation_id)?
+    #[cfg_attr(test, crate::idempotent)]
+    pub async fn export_secret_key(&self, conversation_id: &ConversationId, key_length: usize) -> Result<Vec<u8>> {
+        self.get_conversation(conversation_id)
+            .await?
             .export_secret_key(&self.mls_backend, key_length)
     }
 
@@ -65,18 +101,15 @@ impl MlsCentral {
     ///
     /// # Errors
     /// if the conversation can't be found
-    pub fn get_client_ids(&self, conversation_id: &ConversationId) -> CryptoResult<Vec<ClientId>> {
-        Ok(self.get_conversation(conversation_id)?.get_client_ids())
+    #[cfg_attr(test, crate::idempotent)]
+    pub async fn get_client_ids(&self, conversation_id: &ConversationId) -> Result<Vec<ClientId>> {
+        Ok(self.get_conversation(conversation_id).await?.get_client_ids())
     }
 }
 
 #[cfg(test)]
-pub mod tests {
-
-    use crate::{
-        prelude::{CryptoError, MlsError},
-        test_utils::*,
-    };
+mod tests {
+    use crate::{mls, test_utils::*, LeafError, MlsErrorKind};
     use openmls::prelude::ExportSecretError;
 
     use wasm_bindgen_test::*;
@@ -89,16 +122,17 @@ pub mod tests {
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
         pub async fn can_export_secret_key(case: TestCase) {
-            run_test_with_client_ids(case.clone(), ["alice"], move |[mut alice_central]| {
+            run_test_with_client_ids(case.clone(), ["alice"], move |[alice_central]| {
                 Box::pin(async move {
                     let id = conversation_id();
                     alice_central
-                        .new_conversation(id.clone(), case.cfg.clone())
+                        .context
+                        .new_conversation(&id, case.credential_type, case.cfg.clone())
                         .await
                         .unwrap();
 
                     let key_length = 128;
-                    let result = alice_central.export_secret_key(&id, key_length);
+                    let result = alice_central.context.export_secret_key(&id, key_length).await;
                     assert!(result.is_ok());
                     assert_eq!(result.unwrap().len(), key_length);
                 })
@@ -109,18 +143,21 @@ pub mod tests {
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
         pub async fn cannot_export_secret_key_invalid_length(case: TestCase) {
-            run_test_with_client_ids(case.clone(), ["alice"], move |[mut alice_central]| {
+            run_test_with_client_ids(case.clone(), ["alice"], move |[alice_central]| {
                 Box::pin(async move {
                     let id = conversation_id();
                     alice_central
-                        .new_conversation(id.clone(), case.cfg.clone())
+                        .context
+                        .new_conversation(&id, case.credential_type, case.cfg.clone())
                         .await
                         .unwrap();
 
-                    let result = alice_central.export_secret_key(&id, usize::MAX);
-                    assert!(matches!(
-                        result.unwrap_err(),
-                        CryptoError::MlsError(MlsError::MlsExportSecretError(ExportSecretError::KeyLengthTooLong))
+                    let result = alice_central.context.export_secret_key(&id, usize::MAX).await;
+                    let error = result.unwrap_err();
+                    // let error = error.downcast_mls().unwrap().0;
+                    assert!(innermost_source_matches!(
+                        error,
+                        MlsErrorKind::MlsExportSecretError(ExportSecretError::KeyLengthTooLong)
                     ));
                 })
             })
@@ -130,17 +167,23 @@ pub mod tests {
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
         pub async fn cannot_export_secret_key_not_found(case: TestCase) {
-            run_test_with_client_ids(case.clone(), ["alice"], move |[mut alice_central]| {
+            run_test_with_client_ids(case.clone(), ["alice"], move |[alice_central]| {
                 Box::pin(async move {
                     let id = conversation_id();
                     alice_central
-                        .new_conversation(id.clone(), case.cfg.clone())
+                        .context
+                        .new_conversation(&id, case.credential_type, case.cfg.clone())
                         .await
                         .unwrap();
 
                     let unknown_id = b"not_found".to_vec();
-                    let error = alice_central.get_client_ids(&unknown_id).unwrap_err();
-                    assert!(matches!(error, CryptoError::ConversationNotFound(c) if c == unknown_id));
+                    let error = alice_central.context.get_client_ids(&unknown_id).await.unwrap_err();
+                    // assert!(matches!(error, Error::ConversationNotFound(c) if c == unknown_id));
+                    assert!(matches!(
+                        error,
+                        mls::conversation::Error::Leaf(LeafError::ConversationNotFound(c))
+                        if c == unknown_id
+                    ))
                 })
             })
             .await
@@ -153,44 +196,43 @@ pub mod tests {
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
         pub async fn can_get_client_ids(case: TestCase) {
-            run_test_with_client_ids(
-                case.clone(),
-                ["alice", "bob"],
-                move |[mut alice_central, mut bob_central]| {
-                    Box::pin(async move {
-                        let id = conversation_id();
-                        alice_central
-                            .new_conversation(id.clone(), case.cfg.clone())
-                            .await
-                            .unwrap();
+            run_test_with_client_ids(case.clone(), ["alice", "bob"], move |[alice_central, bob_central]| {
+                Box::pin(async move {
+                    let id = conversation_id();
+                    alice_central
+                        .context
+                        .new_conversation(&id, case.credential_type, case.cfg.clone())
+                        .await
+                        .unwrap();
 
-                        assert_eq!(alice_central.get_client_ids(&id).unwrap().len(), 1);
+                    assert_eq!(alice_central.context.get_client_ids(&id).await.unwrap().len(), 1);
 
-                        alice_central
-                            .invite(&id, &mut bob_central, case.custom_cfg())
-                            .await
-                            .unwrap();
-                        assert_eq!(alice_central.get_client_ids(&id).unwrap().len(), 2);
-                    })
-                },
-            )
+                    alice_central.invite_all(&case, &id, [&bob_central]).await.unwrap();
+                    assert_eq!(alice_central.context.get_client_ids(&id).await.unwrap().len(), 2);
+                })
+            })
             .await
         }
 
         #[apply(all_cred_cipher)]
         #[wasm_bindgen_test]
         pub async fn cannot_get_client_ids_not_found(case: TestCase) {
-            run_test_with_client_ids(case.clone(), ["alice"], move |[mut alice_central]| {
+            run_test_with_client_ids(case.clone(), ["alice"], move |[alice_central]| {
                 Box::pin(async move {
                     let id = conversation_id();
                     alice_central
-                        .new_conversation(id.clone(), case.cfg.clone())
+                        .context
+                        .new_conversation(&id, case.credential_type, case.cfg.clone())
                         .await
                         .unwrap();
 
                     let unknown_id = b"not_found".to_vec();
-                    let error = alice_central.get_client_ids(&unknown_id).unwrap_err();
-                    assert!(matches!(error, CryptoError::ConversationNotFound(c) if c == unknown_id));
+                    let error = alice_central.context.get_client_ids(&unknown_id).await.unwrap_err();
+                    assert!(matches!(
+                        error,
+                        mls::conversation::Error::Leaf(LeafError::ConversationNotFound(c))
+                        if c == unknown_id
+                    ))
                 })
             })
             .await

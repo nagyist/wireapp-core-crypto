@@ -1,10 +1,32 @@
-name: Check License, sources
+name: check license, sources
 
-on: [ push ]
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: EmbarkStudios/cargo-deny-action@v1
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1  # this implicitly caches Rust tools and build artifacts
+        with:
+          rustflags: ''
+      - uses: taiki-e/install-action@cargo-deny
+      - name: "check licenses / supply chain"
+        run: |
+          cargo deny --all-features check >> $GITHUB_STEP_SUMMARY
+      - name: "build a dependency licenses inventory and post it to summary"
+        run: |
+          cargo deny --all-features list --layout crate --format json | jq -r 'to_entries[] | "* \(.key)", "    * \(.value.licenses[])"' >> $GITHUB_STEP_SUMMARY

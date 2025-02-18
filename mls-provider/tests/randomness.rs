@@ -13,7 +13,7 @@
 
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see http://www.gnu.org/licenses/.
-#![allow(non_snake_case, dead_code, unused_macros, unused_imports)]
+#![allow(non_snake_case, dead_code, unused_macros, unused_imports, clippy::await_holding_lock)]
 
 pub use rstest::*;
 pub use rstest_reuse::{self, *};
@@ -24,7 +24,7 @@ const ITER_ROUNDS: usize = 10000;
 const RAND_ARR_LEN: usize = 128;
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use crate::{fixtures::*, ITER_ROUNDS, RAND_ARR_LEN};
     use getrandom::getrandom;
     use mls_crypto_provider::{EntropySeed, MlsCryptoProvider};
@@ -37,7 +37,7 @@ pub mod tests {
     wasm_bindgen_test_configure!(run_in_browser);
 
     fn test_randomness(backend: &mut MlsCryptoProvider, entropy: Option<EntropySeed>) {
-        backend.reseed(entropy);
+        backend.reseed(entropy).unwrap();
 
         let random = backend.rand();
         let mut hashes = Vec::with_capacity(ITER_ROUNDS);
@@ -86,12 +86,12 @@ pub mod tests {
     #[apply(use_provider)]
     #[wasm_bindgen_test]
     async fn can_be_externally_seeded_ietf_vectors_1_2(backend: MlsCryptoProvider) {
-        let mut backend = backend.await;
+        let backend = backend.await;
         // Test vectors 1 and 2 from
         // https://tools.ietf.org/html/draft-nir-cfrg-chacha20-poly1305-04
         let seed = [0u8; 32];
-        backend.reseed(Some(EntropySeed::from_raw(seed)));
-        let mut rng = backend.rand().borrow_rand();
+        backend.reseed(Some(EntropySeed::from_raw(seed))).unwrap();
+        let mut rng = backend.rand().borrow_rand().unwrap();
 
         let mut results = [0u32; 16];
         for i in results.iter_mut() {
@@ -120,14 +120,14 @@ pub mod tests {
     #[apply(use_provider)]
     #[wasm_bindgen_test]
     async fn can_be_externally_seeded_ietf_vector_3(backend: MlsCryptoProvider) {
-        let mut backend = backend.await;
+        let backend = backend.await;
         // Test vector 3 from
         // https://tools.ietf.org/html/draft-nir-cfrg-chacha20-poly1305-04
         let seed = [
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
         ];
-        backend.reseed(Some(EntropySeed::from_raw(seed)));
-        let mut rng = backend.rand().borrow_rand();
+        backend.reseed(Some(EntropySeed::from_raw(seed))).unwrap();
+        let mut rng = backend.rand().borrow_rand().unwrap();
 
         // Skip block 0
         for _ in 0..16 {
@@ -152,7 +152,7 @@ pub mod tests {
     #[apply(use_provider)]
     #[wasm_bindgen_test]
     async fn can_be_externally_seeded_ietf_vector_4(backend: MlsCryptoProvider) {
-        let mut backend = backend.await;
+        let backend = backend.await;
         // Test vector 4 from
         // https://tools.ietf.org/html/draft-nir-cfrg-chacha20-poly1305-04
         let seed = [
@@ -166,8 +166,8 @@ pub mod tests {
         let mut results = [0u32; 16];
 
         // Test block 2 by skipping block 0 and 1
-        backend.reseed(Some(EntropySeed::from_raw(seed)));
-        let mut rng1 = backend.rand().borrow_rand();
+        backend.reseed(Some(EntropySeed::from_raw(seed))).unwrap();
+        let mut rng1 = backend.rand().borrow_rand().unwrap();
         for _ in 0..32 {
             rng1.next_u32();
         }
@@ -180,8 +180,8 @@ pub mod tests {
         drop(rng1);
 
         // Test block 2 by using `set_word_pos`
-        backend.reseed(Some(EntropySeed::from_raw(seed)));
-        let mut rng2 = backend.rand().borrow_rand();
+        backend.reseed(Some(EntropySeed::from_raw(seed))).unwrap();
+        let mut rng2 = backend.rand().borrow_rand().unwrap();
         rng2.set_word_pos(2 * 16);
         for i in results.iter_mut() {
             *i = rng2.next_u32();
@@ -209,12 +209,12 @@ pub mod tests {
     #[apply(use_provider)]
     #[wasm_bindgen_test]
     async fn can_be_externally_seeded_ietf_vector_5(backend: MlsCryptoProvider) {
-        let mut backend = backend.await;
+        let backend = backend.await;
         // Test vector 5 from
         // https://tools.ietf.org/html/draft-nir-cfrg-chacha20-poly1305-04
         let seed = [0u8; 32];
-        backend.reseed(Some(EntropySeed::from_raw(seed)));
-        let mut rng = backend.rand().borrow_rand();
+        backend.reseed(Some(EntropySeed::from_raw(seed))).unwrap();
+        let mut rng = backend.rand().borrow_rand().unwrap();
         // 96-bit nonce in LE order is: 0,0,0,0, 0,0,0,0, 0,0,0,2
         rng.set_stream(2u64 << (24 + 32));
 

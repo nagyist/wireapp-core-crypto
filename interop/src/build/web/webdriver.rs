@@ -18,20 +18,20 @@ use crate::util::RunningProcess;
 use crate::TEST_SERVER_URI;
 use color_eyre::eyre::Result;
 
-pub fn setup_webdriver(force: bool) -> Result<()> {
+pub(crate) async fn setup_webdriver(force: bool) -> Result<()> {
     let mut spinner = RunningProcess::new("Setting up WebDriver & co...", false);
 
     let wd_dir = dirs::home_dir().unwrap().join(".webdrivers");
-    let chrome = webdriver_install::Driver::Chrome;
+    let chrome = webdriver_installation::WebdriverKind::Chrome;
 
     if force {
         spinner.update("FORCE_WEBDRIVER_INSTALL is set. Forcefully removing webdrivers...");
         std::fs::remove_dir(&wd_dir)?;
     }
 
-    if !wd_dir.join(chrome.as_str()).exists() {
+    if !wd_dir.join(chrome.as_exe_name()).exists() {
         spinner.update("Chrome WebDriver isn't installed. Installing...");
-        chrome.install()?;
+        chrome.install_webdriver(&wd_dir, force).await?;
     }
 
     spinner.update("Chrome WebDriver installed");
@@ -41,7 +41,7 @@ pub fn setup_webdriver(force: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn start_webdriver_chrome(addr: &std::net::SocketAddr) -> Result<tokio::process::Child> {
+pub(crate) async fn start_webdriver_chrome(addr: &std::net::SocketAddr) -> Result<tokio::process::Child> {
     let wd_dir = dirs::home_dir().unwrap().join(".webdrivers");
 
     Ok(tokio::process::Command::new(wd_dir.join("chromedriver"))
@@ -51,21 +51,25 @@ pub async fn start_webdriver_chrome(addr: &std::net::SocketAddr) -> Result<tokio
         .spawn()?)
 }
 
-pub async fn setup_browser(addr: &std::net::SocketAddr, folder: &str) -> Result<fantoccini::Client> {
-    // let spinner = RunningProcess::new("Starting Fantoccini remote browser...", false);
-    let caps = serde_json::Map::from_iter(
-        vec![(
-            "goog:chromeOptions".to_string(),
-            serde_json::json!({
-                "args": [
-                    "headless",
-                    "disable-dev-shm-usage",
-                    "no-sandbox"
-                ]
-            }),
-        )]
-        .into_iter(),
-    );
+pub(crate) async fn setup_browser(addr: &std::net::SocketAddr, folder: &str) -> Result<fantoccini::Client> {
+    let spinner = RunningProcess::new("Starting Fantoccini remote browser...", false);
+    let mut caps_json = serde_json::json!({
+        "goog:chromeOptions": {
+            "args": [
+                "headless",
+                "disable-dev-shm-usage",
+                "no-sandbox"
+            ]
+        }
+    });
+
+    if let Ok(chrome_path) = std::env::var("CHROME_PATH") {
+        caps_json["goog:chromeOptions"]["binary"] = chrome_path.into();
+    }
+
+    let serde_json::Value::Object(caps) = caps_json else {
+        unreachable!("`serde_json::json!()` did not produce an object when provided an object. Something is broken.")
+    };
 
     let browser = fantoccini::ClientBuilder::native()
         .capabilities(caps)
@@ -73,7 +77,6 @@ pub async fn setup_browser(addr: &std::net::SocketAddr, folder: &str) -> Result<
         .await?;
     browser.goto(&format!("{TEST_SERVER_URI}/{folder}/index.html")).await?;
 
-    // spinner.success("Browser [OK]");
-
+    spinner.success("Browser [OK]");
     Ok(browser)
 }

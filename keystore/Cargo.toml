@@ -2,7 +2,7 @@
 name = "core-crypto-keystore"
 description = "Encrypted keystore with support for OpenMLS and Proteus"
 repository = "https://github.com/wireapp/core-crypto"
-version = "0.6.0-rc.3"
+version = "4.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
@@ -19,42 +19,53 @@ harness = false
 name = "write"
 harness = false
 
+[lints]
+workspace = true
+
 [features]
-default = ["mls-keystore", "proteus-keystore"]
-mls-keystore = ["openmls_traits"]
-proteus-keystore = ["proteus-traits"]
-ios-wal-compat = ["security-framework"]
-memory-cache = ["lru"]
+default = ["proteus-keystore"]
+proteus-keystore = ["dep:proteus-traits"]
+ios-wal-compat = [
+    "dep:security-framework",
+    "dep:security-framework-sys",
+    "dep:core-foundation",
+]
+idb-regression-test = []
+log-queries = ["rusqlite/trace"]
+serde = ["dep:serde"]
+dummy-entity = ["serde"]
 
 [dependencies]
-thiserror = "1.0"
-cfg-if = "1.0"
-hex = "0.4"
-zeroize = { version = "1.5", features = ["zeroize_derive"] }
-async-trait = "0.1"
-async-lock = "2.5"
-serde_json = "1.0"
-sha2 = "0.10"
-
-lru = { version = "0.7", optional = true }
+thiserror.workspace = true
+cfg-if.workspace = true
+hex.workspace = true
+zeroize = { workspace = true, features = ["zeroize_derive"] }
+async-trait.workspace = true
+async-lock.workspace = true
+postcard = { version = "1.1", default-features = false, features = ["use-std"] }
+sha2.workspace = true
+serde_json.workspace = true
+core-crypto-macros.workspace = true
 
 # iOS specific things
-security-framework = { version = "2.6", optional = true }
+security-framework = { version = "3.0", optional = true }
+security-framework-sys = { version = "2.14", optional = true }
+core-foundation = { version = "0.10", optional = true }
 
-openmls_traits = { version = "0.1", optional = true, features = ["single-threaded"] }
-
-[dependencies.proteus-traits]
-optional = true
-package = "proteus-traits"
-git = "https://github.com/wireapp/proteus"
-branch = "otak/2.0"
+openmls_traits = { workspace = true }
+openmls_basic_credential = { workspace = true }
+openmls_x509_credential = { workspace = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+log = { workspace = true }
+proteus-traits = { workspace = true, optional = true }
+itertools.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-async-fs = "1.5"
-blocking = "1.2"
+async-fs = "2.1"
+blocking = "1.6"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.rusqlite]
-version = "0.28"
+version = "0.31"
 default-features = false
 features = [
     "bundled-sqlcipher-vendored-openssl",
@@ -62,50 +73,60 @@ features = [
     "limits",
     "unlock_notify",
     "uuid",
+    "functions",
 ]
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.refinery]
 version = "0.8"
-# git = "https://github.com/rust-db/refinery"
-# rev = "36e2c219de236c95853a0aa6cd606a2d52d255f8"
 default-features = false
 features = ["rusqlite"]
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-rexie = { version = "0.4", default-features = false, features = ["js"] }
+idb.workspace = true
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console"] }
 wasm-bindgen = "0.2"
-serde = { version = "1.0", features = ["derive"] }
-serde-big-array = "0.4"
-serde-wasm-bindgen = "0.4"
+serde = { workspace = true, features = ["derive"] }
+serde-big-array = "0.5"
+serde-wasm-bindgen = "0.6"
 # Async WASM stuff
 wasm-bindgen-futures = "0.4"
 # Crypto stuff
 aes-gcm = "0.10"
-rand = { version = "0.8", features = ["getrandom"] }
+rand.workspace = true
 getrandom = { version = "0.2", features = ["js"] }
+web-time = "1.1.0"
+# Old keystore versions for idb migrations
+rexie.workspace = true
+
 
 [dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }
 wasm-bindgen-test = "0.3"
-uuid = { version = "1.0", features = ["v4", "js"] }
-rand = { version = "0.8", features = ["getrandom"] }
+uuid = { workspace = true, features = ["v4", "js"] }
+rand = { workspace = true, features = ["getrandom"] }
 getrandom = { version = "0.2", features = ["js"] }
-openmls = { version = "0.4", default-features = false, features = ["crypto-subtle"] }
-mls-crypto-provider = { path = "../mls-provider" }
-rstest = "0.16"
-rstest_reuse = "0.4"
-async-std = { version = "1.12", features = ["attributes"] }
-futures-lite = "1.12"
-
-[dev-dependencies.proteus-wasm]
-version = "2.0"
-git = "https://github.com/wireapp/proteus"
-branch = "otak/2.0"
+openmls = { workspace = true, features = ["crypto-subtle"] }
+mls-crypto-provider.workspace = true
+rstest = "0.24"
+rstest_reuse = "0.7"
+async-std = { workspace = true, features = ["attributes"] }
+futures-lite = "2.6"
+core-crypto-keystore = { path = ".", features = [
+    "idb-regression-test",
+    "log-queries",
+] }
+pretty_env_logger = "0.5"
+proteus-wasm = { workspace = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies.criterion]
-version = "0.3"
+version = "0.5"
 features = ["async_futures", "html_reports"]
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Os", "--enable-mutable-globals", "--enable-threads", "--detect-features"]
+wasm-opt = [
+    "-Os",
+    "--enable-mutable-globals",
+    "--enable-threads",
+    "--detect-features",
+]

@@ -14,51 +14,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see http://www.gnu.org/licenses/.
 
-use openmls_traits::key_store::{FromKeyStoreValue, ToKeyStoreValue};
-
+use crate::connection::FetchFromDatabase;
+use crate::entities::MlsEpochEncryptionKeyPair;
 use crate::{
-    connection::Connection,
     entities::{
-        EntityFindParams, MlsIdentity, MlsIdentityExt, MlsKeypackage, PersistedMlsGroup, PersistedMlsPendingGroup,
-        StringEntityId,
+        E2eiEnrollment, EntityFindParams, MlsEncryptionKeyPair, MlsHpkePrivateKey, MlsKeyPackage, MlsPskBundle,
+        MlsSignatureKeyPair, PersistedMlsGroup, PersistedMlsPendingGroup,
     },
     CryptoKeystoreError, CryptoKeystoreResult, MissingKeyErrorKind,
 };
+use openmls_basic_credential::SignatureKeyPair;
+use openmls_traits::key_store::{MlsEntity, MlsEntityId};
 
 /// An interface for the specialized queries in the KeyStore
-#[async_trait::async_trait(?Send)]
+#[cfg_attr(target_family = "wasm", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_family = "wasm"), async_trait::async_trait)]
 pub trait CryptoKeystoreMls: Sized {
-    /// Retrieves an identity signature from a client id
-    ///
-    /// # Arguments
-    /// * `id` - client id
-    ///
-    /// # Errors
-    /// Any common error that can happen during a database connection. IoError being a common error
-    /// for example.
-    async fn mls_load_identity_signature(&self, id: &str) -> CryptoKeystoreResult<Option<Vec<u8>>>;
-    /// Saves the signature and credentials for a client id
-    ///
-    /// # Arguments
-    /// * `id` - client id
-    /// * `signature` - the signature to be stored
-    /// * `credential` - the credential to be stored
-    ///
-    /// # Errors
-    /// Any common error that can happen during a database connection. IoError being a common error
-    /// for example.
-    async fn mls_save_identity_signature(
-        &self,
-        id: &str,
-        signature: &[u8],
-        credential: &[u8],
-    ) -> CryptoKeystoreResult<()>;
-    /// Counts how many KeyPackages are stored
-    ///
-    /// # Errors
-    /// Any common error that can happen during a database connection. IoError being a common error
-    /// for example.
-    async fn mls_keypackagebundle_count(&self) -> CryptoKeystoreResult<usize>;
     /// Fetches Keypackages
     ///
     /// # Arguments
@@ -67,13 +38,15 @@ pub trait CryptoKeystoreMls: Sized {
     /// # Errors
     /// Any common error that can happen during a database connection. IoError being a common error
     /// for example.
-    async fn mls_fetch_keypackage_bundles<V: FromKeyStoreValue>(&self, count: u32) -> CryptoKeystoreResult<Vec<V>>;
-    /// Fetches a singles keypackage
+    async fn mls_fetch_keypackages<V: MlsEntity>(&self, count: u32) -> CryptoKeystoreResult<Vec<V>>;
+
+    /// Checks if the given MLS group id exists in the keystore
+    /// Note: in case of any error, this will return false
     ///
-    /// # Errors
-    /// Any common error that can happen during a database connection. IoError being a common error
-    /// for example.
-    async fn mls_get_keypackage<V: FromKeyStoreValue>(&self) -> CryptoKeystoreResult<V>;
+    /// # Arguments
+    /// * `group_id` - group/conversation id
+    async fn mls_group_exists(&self, group_id: &[u8]) -> bool;
+
     /// Persists a `MlsGroup`
     ///
     /// # Arguments
@@ -83,19 +56,29 @@ pub trait CryptoKeystoreMls: Sized {
     /// # Errors
     /// Any common error that can happen during a database connection. IoError being a common error
     /// for example.
-    async fn mls_group_persist(&self, group_id: &[u8], state: &[u8]) -> CryptoKeystoreResult<()>;
+    async fn mls_group_persist(
+        &self,
+        group_id: &[u8],
+        state: &[u8],
+        parent_group_id: Option<&[u8]>,
+    ) -> CryptoKeystoreResult<()>;
+
     /// Loads `MlsGroups` from the database. It will be returned as a `HashMap` where the key is
     /// the group/conversation id and the value the group state
     ///
     /// # Errors
     /// Any common error that can happen during a database connection. IoError being a common error
     /// for example.
-    async fn mls_groups_restore(&self) -> CryptoKeystoreResult<std::collections::HashMap<Vec<u8>, Vec<u8>>>;
+    async fn mls_groups_restore(
+        &self,
+    ) -> CryptoKeystoreResult<std::collections::HashMap<Vec<u8>, (Option<Vec<u8>>, Vec<u8>)>>;
+
     /// Deletes `MlsGroups` from the database.
     /// # Errors
     /// Any common error that can happen during a database connection. IoError being a common error
     /// for example.
     async fn mls_group_delete(&self, group_id: &[u8]) -> CryptoKeystoreResult<()>;
+
     /// Saves a `MlsGroup` in a temporary table (typically used in scenarios where the group cannot
     /// be committed until the backend acknowledges it, like external commits)
     ///
@@ -112,7 +95,9 @@ pub trait CryptoKeystoreMls: Sized {
         group_id: &[u8],
         mls_group: &[u8],
         custom_configuration: &[u8],
+        parent_group_id: Option<&[u8]>,
     ) -> CryptoKeystoreResult<()>;
+
     /// Loads a temporary `MlsGroup` and its configuration from the database
     ///
     /// # Arguments
@@ -122,6 +107,7 @@ pub trait CryptoKeystoreMls: Sized {
     /// Any common error that can happen during a database connection. IoError being a common error
     /// for example.
     async fn mls_pending_groups_load(&self, group_id: &[u8]) -> CryptoKeystoreResult<(Vec<u8>, Vec<u8>)>;
+
     /// Deletes a temporary `MlsGroup` from the database
     ///
     /// # Arguments
@@ -131,220 +117,74 @@ pub trait CryptoKeystoreMls: Sized {
     /// Any common error that can happen during a database connection. IoError being a common error
     /// for example.
     async fn mls_pending_groups_delete(&self, group_id: &[u8]) -> CryptoKeystoreResult<()>;
+
+    /// Persists an enrollment instance
+    ///
+    /// # Arguments
+    /// * `id` - hash of the enrollment and unique identifier
+    /// * `content` - serialized enrollment
+    async fn save_e2ei_enrollment(&self, id: &[u8], content: &[u8]) -> CryptoKeystoreResult<()>;
+
+    /// Fetches and delete the enrollment instance
+    ///
+    /// # Arguments
+    /// * `id` - hash of the enrollment and unique identifier
+    async fn pop_e2ei_enrollment(&self, id: &[u8]) -> CryptoKeystoreResult<Vec<u8>>;
 }
 
-#[inline(always)]
-fn bytes_to_string_id(raw: &[u8]) -> String {
-    StringEntityId::new(raw).as_hex_string()
-}
-
-impl Connection {
-    #[cfg(feature = "memory-cache")]
-    #[inline(always)]
-    fn mls_cache_key(k: &[u8]) -> Vec<u8> {
-        let mut ret = vec![0; 4 + k.len()];
-        ret[..4].copy_from_slice(b"mls:");
-        ret[4..].copy_from_slice(k);
-        ret
-    }
-
-    #[cfg(test)]
-    pub async fn mls_store_keypackage_bundle(
-        &self,
-        key: openmls::prelude::KeyPackageBundle,
-    ) -> CryptoKeystoreResult<()> {
-        let id = key.key_package().external_key_id()?;
-        use openmls_traits::key_store::OpenMlsKeyStore as _;
-        self.store(id, &key).await?;
-
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait(?Send)]
-impl CryptoKeystoreMls for crate::connection::Connection {
-    // TODO: Review zero on drop behavior here
-    async fn mls_load_identity_signature(&self, id: &str) -> CryptoKeystoreResult<Option<Vec<u8>>> {
-        Ok(self
-            .find(id.as_bytes())
-            .await?
-            .map(|id: MlsIdentity| id.signature.clone()))
-    }
-
-    async fn mls_save_identity_signature(
-        &self,
-        id: &str,
-        signature: &[u8],
-        credential: &[u8],
-    ) -> CryptoKeystoreResult<()> {
-        let identity = MlsIdentity {
-            id: id.into(),
-            signature: signature.into(),
-            credential: credential.into(),
-        };
-
-        self.save(identity).await?;
-        Ok(())
-    }
-
-    async fn mls_keypackagebundle_count(&self) -> CryptoKeystoreResult<usize> {
-        self.count::<MlsKeypackage>().await
-    }
-
-    #[cfg(target_family = "wasm")]
-    async fn mls_fetch_keypackage_bundles<V: FromKeyStoreValue>(&self, count: u32) -> CryptoKeystoreResult<Vec<V>> {
-        use crate::{connection::storage::WasmStorageWrapper, entities::Entity};
-        let conn = self.conn.lock_arc().await;
-        let cipher = &conn.storage().cipher;
-        let storage = &conn.storage().storage;
-
-        let raw_kps: Vec<MlsKeypackage> = match storage {
-            WasmStorageWrapper::Persistent(rexie) => {
-                let transaction = rexie.transaction(&["mls_keys"], rexie::TransactionMode::ReadOnly)?;
-                let store = transaction.store("mls_keys")?;
-                let items_fut = store.get_all(None, Some(count), None, Some(rexie::Direction::Next));
-
-                let items = items_fut.await?;
-
-                if items.is_empty() {
-                    return Ok(vec![]);
-                }
-
-                let kps = items
-                    .into_iter()
-                    .map(|(_k, v)| {
-                        let mut kp: MlsKeypackage = serde_wasm_bindgen::from_value(v)?;
-                        kp.decrypt(cipher)?;
-                        Ok(kp)
-                    })
-                    .collect::<CryptoKeystoreResult<Vec<MlsKeypackage>>>()?;
-
-                CryptoKeystoreResult::Ok(kps)
+#[cfg_attr(target_family = "wasm", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_family = "wasm"), async_trait::async_trait)]
+impl CryptoKeystoreMls for crate::Connection {
+    async fn mls_fetch_keypackages<V: MlsEntity>(&self, count: u32) -> CryptoKeystoreResult<Vec<V>> {
+        cfg_if::cfg_if! {
+            if #[cfg(not(target_family = "wasm"))] {
+                let reverse = true;
+            } else {
+                let reverse = false;
             }
-            WasmStorageWrapper::InMemory(map) => {
-                if let Some(collection) = map.get("mls_keys") {
-                    let kps = collection
-                        .iter()
-                        .take(count as usize)
-                        .map(|(_k, v)| {
-                            let mut entity: MlsKeypackage = serde_wasm_bindgen::from_value(v.clone())?;
-                            entity.decrypt(cipher)?;
-                            Ok(entity)
-                        })
-                        .collect::<CryptoKeystoreResult<Vec<MlsKeypackage>>>()?;
-
-                    Ok(kps)
-                } else {
-                    Ok(vec![])
-                }
-            }
-        }?;
-
-        Ok(raw_kps
-            .into_iter()
-            .filter_map(|kpb| V::from_key_store_value(&kpb.key).ok())
-            .collect())
-    }
-
-    #[cfg(target_family = "wasm")]
-    async fn mls_get_keypackage<V: FromKeyStoreValue>(&self) -> CryptoKeystoreResult<V> {
-        use crate::{connection::storage::WasmStorageWrapper, entities::Entity};
-        let conn = self.conn.lock_arc().await;
-        let cipher = conn.storage().cipher.clone();
-        let storage = &conn.storage().storage;
-
-        let raw_kp: MlsKeypackage = match storage {
-            WasmStorageWrapper::Persistent(rexie) => {
-                let transaction = rexie.transaction(&["mls_keys"], rexie::TransactionMode::ReadOnly)?;
-                let store = transaction.store("mls_keys")?;
-
-                let items_fut = store.get_all(None, Some(1), None, Some(rexie::Direction::Next));
-
-                let items = items_fut.await?;
-
-                if items.is_empty() {
-                    return Err(CryptoKeystoreError::OutOfKeyPackageBundles);
-                }
-
-                let (_, js_kp) = items[0].clone();
-                let mut kp: MlsKeypackage = serde_wasm_bindgen::from_value(js_kp)?;
-                kp.decrypt(&cipher)?;
-
-                drop(items);
-
-                transaction.commit().await?;
-
-                Ok(kp)
-            }
-            WasmStorageWrapper::InMemory(map) => {
-                if let Some(collection) = map.get("mls_keys") {
-                    if let Some((_, js_kp)) = collection.iter().next() {
-                        let mut entity: MlsKeypackage = serde_wasm_bindgen::from_value(js_kp.clone())?;
-                        entity.decrypt(&cipher)?;
-                        Ok(entity)
-                    } else {
-                        Err(CryptoKeystoreError::OutOfKeyPackageBundles)
-                    }
-                } else {
-                    Err(CryptoKeystoreError::OutOfKeyPackageBundles)
-                }
-            }
-        }?;
-
-        Ok(V::from_key_store_value(&raw_kp.key)
-            .map_err(|e| CryptoKeystoreError::KeyStoreValueTransformError(Box::new(e)))?)
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    async fn mls_fetch_keypackage_bundles<V: FromKeyStoreValue>(&self, count: u32) -> CryptoKeystoreResult<Vec<V>> {
-        let db = self.conn.lock().await;
-
-        let mut stmt = db.prepare_cached("SELECT id FROM mls_keys ORDER BY rowid DESC LIMIT ?")?;
-
-        let kpb_ids: Vec<String> = stmt
-            .query_map([count], |r| r.get(0))?
-            .map(|r| r.map_err(CryptoKeystoreError::from))
-            .collect::<CryptoKeystoreResult<Vec<String>>>()?;
-
-        drop(stmt);
-        drop(db);
-
-        let keypackages: Vec<MlsKeypackage> = self.find_many(&kpb_ids).await?;
+        }
+        let keypackages = self
+            .find_all::<MlsKeyPackage>(EntityFindParams {
+                limit: Some(count),
+                offset: None,
+                reverse,
+            })
+            .await?;
 
         Ok(keypackages
             .into_iter()
-            .filter_map(|kpb| V::from_key_store_value(&kpb.key).ok())
+            .filter_map(|kpb| postcard::from_bytes(&kpb.keypackage).ok())
             .collect())
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    async fn mls_get_keypackage<V: FromKeyStoreValue>(&self) -> CryptoKeystoreResult<V> {
-        if self.mls_keypackagebundle_count().await? == 0 {
-            return Err(CryptoKeystoreError::OutOfKeyPackageBundles);
-        }
-
-        let db = self.conn.lock().await;
-        let rowid: i64 = db.query_row("SELECT rowid FROM mls_keys ORDER BY rowid ASC LIMIT 1", [], |r| {
-            r.get(0)
-        })?;
-
-        let mut blob = db.blob_open(rusqlite::DatabaseName::Main, "mls_keys", "key", rowid, true)?;
-        use std::io::Read as _;
-        let mut buf = Vec::with_capacity(blob.len());
-        blob.read_to_end(&mut buf)?;
-        blob.close()?;
-
-        V::from_key_store_value(&buf).map_err(|e| CryptoKeystoreError::KeyStoreValueTransformError(Box::new(e)))
+    async fn mls_group_exists(&self, group_id: &[u8]) -> bool {
+        matches!(self.find::<PersistedMlsGroup>(group_id).await, Ok(Some(_)))
     }
 
-    async fn mls_group_persist(&self, group_id: &[u8], state: &[u8]) -> CryptoKeystoreResult<()> {
+    async fn mls_group_persist(
+        &self,
+        group_id: &[u8],
+        state: &[u8],
+        parent_group_id: Option<&[u8]>,
+    ) -> CryptoKeystoreResult<()> {
         self.save(PersistedMlsGroup {
             id: group_id.into(),
             state: state.into(),
+            parent_id: parent_group_id.map(Into::into),
         })
         .await?;
 
         Ok(())
+    }
+
+    async fn mls_groups_restore(
+        &self,
+    ) -> CryptoKeystoreResult<std::collections::HashMap<Vec<u8>, (Option<Vec<u8>>, Vec<u8>)>> {
+        let groups = self.find_all::<PersistedMlsGroup>(EntityFindParams::default()).await?;
+        Ok(groups
+            .into_iter()
+            .map(|group: PersistedMlsGroup| (group.id.clone(), (group.parent_id.clone(), group.state.clone())))
+            .collect())
     }
 
     async fn mls_group_delete(&self, group_id: &[u8]) -> CryptoKeystoreResult<()> {
@@ -353,25 +193,18 @@ impl CryptoKeystoreMls for crate::connection::Connection {
         Ok(())
     }
 
-    // TODO: Review zero on drop behavior
-    async fn mls_groups_restore(&self) -> CryptoKeystoreResult<std::collections::HashMap<Vec<u8>, Vec<u8>>> {
-        let groups = self.find_all::<PersistedMlsGroup>(EntityFindParams::default()).await?;
-        Ok(groups
-            .into_iter()
-            .map(|group: PersistedMlsGroup| (group.id.clone(), group.state.clone()))
-            .collect())
-    }
-
     async fn mls_pending_groups_save(
         &self,
         group_id: &[u8],
         mls_group: &[u8],
         custom_configuration: &[u8],
+        parent_group_id: Option<&[u8]>,
     ) -> CryptoKeystoreResult<()> {
         self.save(PersistedMlsPendingGroup {
             id: group_id.into(),
             state: mls_group.into(),
             custom_configuration: custom_configuration.into(),
+            parent_id: parent_group_id.map(Into::into),
         })
         .await?;
         Ok(())
@@ -389,13 +222,45 @@ impl CryptoKeystoreMls for crate::connection::Connection {
     async fn mls_pending_groups_delete(&self, group_id: &[u8]) -> CryptoKeystoreResult<()> {
         self.remove::<PersistedMlsPendingGroup, _>(group_id).await
     }
+
+    async fn save_e2ei_enrollment(&self, id: &[u8], content: &[u8]) -> CryptoKeystoreResult<()> {
+        self.save(E2eiEnrollment {
+            id: id.into(),
+            content: content.into(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn pop_e2ei_enrollment(&self, id: &[u8]) -> CryptoKeystoreResult<Vec<u8>> {
+        // someone who has time could try to optimize this but honestly it's really on the cold path
+        let enrollment = self
+            .find::<E2eiEnrollment>(id)
+            .await?
+            .ok_or(CryptoKeystoreError::MissingKeyInStore(
+                MissingKeyErrorKind::E2eiEnrollment,
+            ))?;
+        self.remove::<E2eiEnrollment, _>(id).await?;
+        Ok(enrollment.content.clone())
+    }
 }
 
-#[async_trait::async_trait(?Send)]
+#[inline(always)]
+pub fn deser<T: MlsEntity>(bytes: &[u8]) -> Result<T, CryptoKeystoreError> {
+    Ok(postcard::from_bytes(bytes)?)
+}
+
+#[inline(always)]
+pub fn ser<T: MlsEntity>(value: &T) -> Result<Vec<u8>, CryptoKeystoreError> {
+    Ok(postcard::to_stdvec(value)?)
+}
+
+#[cfg_attr(target_family = "wasm", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_family = "wasm"), async_trait::async_trait)]
 impl openmls_traits::key_store::OpenMlsKeyStore for crate::connection::Connection {
     type Error = CryptoKeystoreError;
 
-    async fn store<V: openmls_traits::key_store::ToKeyStoreValue>(&self, k: &[u8], v: &V) -> Result<(), Self::Error>
+    async fn store<V: MlsEntity + Sync>(&self, k: &[u8], v: &V) -> Result<(), Self::Error>
     where
         Self: Sized,
     {
@@ -405,25 +270,64 @@ impl openmls_traits::key_store::OpenMlsKeyStore for crate::connection::Connectio
             ));
         }
 
-        let data = v
-            .to_key_store_value()
-            .map_err(|e| CryptoKeystoreError::KeyStoreValueTransformError(Box::new(e)))?;
-        let type_name = std::any::type_name::<V>();
+        let data = ser(v)?;
 
-        let id = bytes_to_string_id(k);
+        match V::ID {
+            MlsEntityId::GroupState => {
+                return Err(CryptoKeystoreError::IncorrectApiUsage(
+                    "Groups must not be saved using OpenMLS's APIs. You should use the keystore's provided methods",
+                ));
+            }
+            MlsEntityId::SignatureKeyPair => {
+                let concrete_signature_keypair: &SignatureKeyPair = v
+                    .downcast()
+                    .expect("There's an implementation issue in OpenMLS. This shouln't be happening.");
 
-        match type_name {
-            "openmls::key_packages::KeyPackageBundle" => {
-                let kp = MlsKeypackage { id, key: data };
+                // Having an empty credential id seems tolerable, since the SignatureKeyPair type is retrieved from the key store via its public key.
+                let credential_id = vec![];
+                let kp = MlsSignatureKeyPair::new(
+                    concrete_signature_keypair.signature_scheme(),
+                    k.into(),
+                    data,
+                    credential_id,
+                );
                 self.save(kp).await?;
             }
-            _ => unreachable!("OpenMlsKeyStore::store: Unsupported ToKeyStoreValue type"),
+            MlsEntityId::KeyPackage => {
+                let kp = MlsKeyPackage {
+                    keypackage_ref: k.into(),
+                    keypackage: data,
+                };
+                self.save(kp).await?;
+            }
+            MlsEntityId::HpkePrivateKey => {
+                let kp = MlsHpkePrivateKey { pk: k.into(), sk: data };
+                self.save(kp).await?;
+            }
+            MlsEntityId::PskBundle => {
+                let kp = MlsPskBundle {
+                    psk_id: k.into(),
+                    psk: data,
+                };
+                self.save(kp).await?;
+            }
+            MlsEntityId::EncryptionKeyPair => {
+                let kp = MlsEncryptionKeyPair { pk: k.into(), sk: data };
+                self.save(kp).await?;
+            }
+            MlsEntityId::EpochEncryptionKeyPair => {
+                let kp = MlsEpochEncryptionKeyPair {
+                    id: k.into(),
+                    keypairs: data,
+                };
+                self.save(kp).await?;
+            }
         }
 
         Ok(())
     }
 
-    async fn read<V: FromKeyStoreValue>(&self, k: &[u8]) -> Option<V>
+    async fn read<V: MlsEntity>(&self, k: &[u8]) -> Option<V>
     where
         Self: Sized,
     {
@@ -431,70 +335,47 @@ impl openmls_traits::key_store::OpenMlsKeyStore for crate::connection::Connectio
             return None;
         }
 
-        let type_name = std::any::type_name::<V>();
-
-        let hydrated_ksv = match type_name {
-            "openmls::key_packages::KeyPackageBundle" => {
-                let keypackage_id = bytes_to_string_id(k);
-
-                #[cfg(feature = "memory-cache")]
-                if self.is_cache_enabled() {
-                    if let Some(mut cache) = self.memory_cache.try_lock() {
-                        if let Some(value) = cache
-                            .get(&Self::mls_cache_key(k))
-                            .and_then(|buf| V::from_key_store_value(buf).ok())
-                        {
-                            return Some(value);
-                        }
-                    }
-                }
-
-                let kp: MlsKeypackage = self.find(keypackage_id).await.ok().flatten()?;
-
-                #[cfg(feature = "memory-cache")]
-                if self.is_cache_enabled() {
-                    let mut cache = self.memory_cache.lock().await;
-                    cache.put(Self::mls_cache_key(k), kp.key.clone());
-                }
-
-                V::from_key_store_value(&kp.key).ok()?
+        match V::ID {
+            MlsEntityId::GroupState => {
+                let group: PersistedMlsGroup = self.find(k).await.ok().flatten()?;
+                deser(&group.state).ok()
             }
-            "openmls::credentials::CredentialBundle" => {
-                use crate::entities::MlsIdentityExt as _;
-                let mut conn = self.borrow_conn().await.ok()?;
-
-                let identity = MlsIdentity::find_by_signature(&mut conn, k).await.ok().flatten()?;
-
-                V::from_key_store_value(&identity.credential).ok()?
+            MlsEntityId::SignatureKeyPair => {
+                let sig: MlsSignatureKeyPair = self.find(k).await.ok().flatten()?;
+                deser(&sig.keypair).ok()
             }
-            _ => unreachable!("OpenMlsKeyStore::read: Unsupported FromKeyStoreValue type"),
-        };
-
-        Some(hydrated_ksv)
+            MlsEntityId::KeyPackage => {
+                let kp: MlsKeyPackage = self.find(k).await.ok().flatten()?;
+                deser(&kp.keypackage).ok()
+            }
+            MlsEntityId::HpkePrivateKey => {
+                let hpke_pk: MlsHpkePrivateKey = self.find(k).await.ok().flatten()?;
+                deser(&hpke_pk.sk).ok()
+            }
+            MlsEntityId::PskBundle => {
+                let psk_bundle: MlsPskBundle = self.find(k).await.ok().flatten()?;
+                deser(&psk_bundle.psk).ok()
+            }
+            MlsEntityId::EncryptionKeyPair => {
+                let kp: MlsEncryptionKeyPair = self.find(k).await.ok().flatten()?;
+                deser(&kp.sk).ok()
+            }
+            MlsEntityId::EpochEncryptionKeyPair => {
+                let kp: MlsEpochEncryptionKeyPair = self.find(k).await.ok().flatten()?;
+                deser(&kp.keypairs).ok()
+            }
+        }
     }
 
-    async fn delete<V: ToKeyStoreValue>(&self, k: &[u8]) -> Result<(), Self::Error> {
-        if k.is_empty() {
-            return Ok(());
-        }
-        let id = bytes_to_string_id(k);
-
-        #[cfg(feature = "memory-cache")]
-        if self.is_cache_enabled() {
-            let _ = self.memory_cache.lock().await.pop(&Self::mls_cache_key(&k));
-        }
-
-        let type_name = std::any::type_name::<V>();
-
-        match type_name {
-            "openmls::key_packages::KeyPackageBundle" => {
-                self.remove::<MlsKeypackage, _>(id.clone()).await?;
-            }
-            "openmls::credentials::CredentialBundle" => {
-                let mut conn = self.borrow_conn().await?;
-                MlsIdentity::delete_by_signature(&mut conn, k).await?;
-            }
-            _ => unreachable!("OpenMlsKeyStore::delete: Unsupported FromKeyStoreValue type"),
+    async fn delete<V: MlsEntity>(&self, k: &[u8]) -> Result<(), Self::Error> {
+        match V::ID {
+            MlsEntityId::GroupState => self.remove::<PersistedMlsGroup, _>(k).await?,
+            MlsEntityId::SignatureKeyPair => self.remove::<MlsSignatureKeyPair, _>(k).await?,
+            MlsEntityId::HpkePrivateKey => self.remove::<MlsHpkePrivateKey, _>(k).await?,
+            MlsEntityId::KeyPackage => self.remove::<MlsKeyPackage, _>(k).await?,
+            MlsEntityId::PskBundle => self.remove::<MlsPskBundle, _>(k).await?,
+            MlsEntityId::EncryptionKeyPair => self.remove::<MlsEncryptionKeyPair, _>(k).await?,
+            MlsEntityId::EpochEncryptionKeyPair => self.remove::<MlsEpochEncryptionKeyPair, _>(k).await?,
         }
 
         Ok(())

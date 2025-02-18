@@ -20,117 +20,119 @@
 //! The goal is provide a easier and less verbose API to create, manage and interact with MLS
 //! groups.
 #![doc = include_str!("../../README.md")]
-#![deny(missing_docs)]
+#![cfg_attr(not(test), deny(missing_docs))]
 #![allow(clippy::single_component_path_imports)]
 
+use async_lock::Mutex;
 #[cfg(test)]
-use rstest_reuse;
+pub use core_crypto_macros::{dispotent, durable, idempotent};
+use std::sync::Arc;
+
+pub use self::error::*;
 
 #[cfg(test)]
 #[macro_use]
 pub mod test_utils;
 // both imports above have to be defined at the beginning of the crate for rstest to work
 
-pub use self::error::*;
-
-#[cfg(test)]
-pub use core_crypto_attributes::durable;
-
 mod error;
 
 /// MLS Abstraction
 pub mod mls;
 
+/// re-export [rusty-jwt-tools](https://github.com/wireapp/rusty-jwt-tools) API
+pub mod e2e_identity;
+
 #[cfg(feature = "proteus")]
 /// Proteus Abstraction
 pub mod proteus;
 
+pub mod context;
+mod group_store;
+mod obfuscate;
+
+mod build_metadata;
+use crate::prelude::MlsCommitBundle;
+pub use build_metadata::{BuildMetadata, BUILD_METADATA};
+
 /// Common imports that should be useful for most uses of the crate
 pub mod prelude {
-    pub use openmls::group::{MlsGroup, MlsGroupConfig};
-    pub use openmls::prelude::Ciphersuite as CiphersuiteName;
-    pub use openmls::prelude::Credential;
-    pub use openmls::prelude::GroupEpoch;
-    pub use openmls::prelude::KeyPackage;
-    pub use openmls::prelude::KeyPackageRef;
-    pub use openmls::prelude::Node;
-    pub use openmls::prelude::VerifiablePublicGroupState;
-    pub use tls_codec;
+    pub use openmls::{
+        group::{MlsGroup, MlsGroupConfig},
+        prelude::{
+            group_info::VerifiableGroupInfo, Ciphersuite as CiphersuiteName, Credential, GroupEpoch, KeyPackage,
+            KeyPackageIn, KeyPackageRef, MlsMessageIn, Node,
+        },
+    };
 
-    pub use mls_crypto_provider::{EntropySeed, RawEntropySeed};
+    pub use mls_crypto_provider::{EntropySeed, MlsCryptoProvider, RawEntropySeed};
 
     pub use crate::{
-        error::*,
+        e2e_identity::{
+            conversation_state::E2eiConversationState,
+            device_status::DeviceStatus,
+            identity::{WireIdentity, X509Identity},
+            rotate::MlsRotateBundle,
+            types::{E2eiAcmeChallenge, E2eiAcmeDirectory, E2eiNewAcmeAuthz, E2eiNewAcmeOrder},
+            E2eiEnrollment,
+        },
+        error::{CryptoboxMigrationError, Error, KeystoreError, LeafError, MlsError, ProteusError, RecursiveError},
         mls::{
+            ciphersuite::MlsCiphersuite,
+            client::id::ClientId,
+            client::identifier::ClientIdentifier,
+            client::key_package::INITIAL_KEYING_MATERIAL_COUNT,
             client::*,
             config::MlsCentralConfiguration,
             conversation::{
+                commit::{MlsCommitBundle, MlsConversationCreationMessage},
                 config::{MlsConversationConfiguration, MlsCustomConfiguration, MlsWirePolicy},
-                decrypt::MlsConversationDecryptMessage,
-                handshake::{MlsCommitBundle, MlsConversationCreationMessage, MlsProposalBundle},
-                public_group_state::{
-                    MlsPublicGroupStateBundle, MlsPublicGroupStateEncryptionType, MlsRatchetTreeType,
-                    PublicGroupStatePayload,
-                },
-                *,
+                decrypt::{self, MlsBufferedConversationDecryptMessage, MlsConversationDecryptMessage},
+                group_info::{GroupInfoPayload, MlsGroupInfoBundle, MlsGroupInfoEncryptionType, MlsRatchetTreeType},
+                proposal::MlsProposalBundle,
+                welcome::WelcomeBundle,
+                ConversationId, MlsConversation,
             },
-            credential::CertificateBundle,
-            external_commit::MlsConversationInitBundle,
-            member::*,
+            credential::{typ::MlsCredentialType, x509::CertificateBundle},
             proposal::{MlsProposal, MlsProposalRef},
-            MlsCentral, MlsCiphersuite,
+            MlsCentral,
         },
-        CoreCrypto, CoreCryptoCallbacks,
+        CoreCrypto, MlsTransport,
     };
 }
 
-/// This trait is used to provide callback mechanisms for the MlsCentral struct, for example for
-/// operations like adding or removing memebers that can be authorized through a caller provided
-/// authorization method.
-pub trait CoreCryptoCallbacks: std::fmt::Debug + Send + Sync {
-    /// Function responsible for authorizing an operation.
-    /// Returns `true` if the operation is authorized.
-    ///
-    /// # Arguments
-    /// * `conversation_id` - id of the group/conversation
-    /// * `client_id` - id of the client to authorize
-    fn authorize(&self, conversation_id: prelude::ConversationId, client_id: prelude::ClientId) -> bool;
-    /// Function responsible for authorizing an operation for a given user.
-    /// Use [external_client_id] & [existing_clients] to get all the 'client_id' belonging to the same user
-    /// as [external_client_id]. Then, given those client ids, verify that at least one has the right role
-    /// (is authorized) exactly like it's done in [authorize]
-    /// Returns `true` if the operation is authorized.
-    ///
-    /// # Arguments
-    /// * `conversation_id` - id of the group/conversation
-    /// * `external_client_id` - id a client external to the MLS group
-    /// * `existing_clients` - all the clients in the MLS group
-    fn user_authorize(
-        &self,
-        conversation_id: prelude::ConversationId,
-        external_client_id: prelude::ClientId,
-        existing_clients: Vec<prelude::ClientId>,
-    ) -> bool;
-    /// Validates if the given `client_id` belongs to one of the provided `existing_clients`
-    /// This basically allows to defer the client ID parsing logic to the caller - because CoreCrypto is oblivious to such things
-    ///
-    /// # Arguments
-    /// * `client_id` - client ID of the client referenced within the sent proposal
-    /// * `existing_clients` - all the clients in the MLS group
-    fn client_is_existing_group_user(
-        &self,
-        client_id: prelude::ClientId,
-        existing_clients: Vec<prelude::ClientId>,
-    ) -> bool;
+/// Response from the delivery service
+pub enum MlsTransportResponse {
+    /// The message was accepted by the delivery service
+    Success,
+    /// A client should have consumed all incoming messages before re-trying.
+    Retry,
+    /// The message was rejected by the delivery service and there's no recovery.
+    Abort {
+        /// Why did the delivery service reject the message?
+        reason: String,
+    },
+}
+
+/// Client callbacks to allow communication with the delivery service.
+/// There are two different endpoints, one for messages and one for commit bundles.
+#[cfg_attr(target_family = "wasm", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_family = "wasm"), async_trait::async_trait)]
+pub trait MlsTransport: std::fmt::Debug + Send + Sync {
+    /// Send a commit bundle to the corresponding endpoint.
+    async fn send_commit_bundle(&self, commit_bundle: MlsCommitBundle) -> Result<MlsTransportResponse>;
+    /// Send a message to the corresponding endpoint.
+    async fn send_message(&self, mls_message: Vec<u8>) -> Result<MlsTransportResponse>;
 }
 
 #[derive(Debug)]
 /// Wrapper superstruct for both [mls::MlsCentral] and [proteus::ProteusCentral]
+///
 /// As [std::ops::Deref] is implemented, this struct is automatically dereferred to [mls::MlsCentral] apart from `proteus_*` calls
 pub struct CoreCrypto {
     mls: mls::MlsCentral,
     #[cfg(feature = "proteus")]
-    proteus: Option<proteus::ProteusCentral>,
+    proteus: Arc<Mutex<Option<proteus::ProteusCentral>>>,
     #[cfg(not(feature = "proteus"))]
     #[allow(dead_code)]
     proteus: (),
@@ -166,3 +168,6 @@ impl CoreCrypto {
         self.mls
     }
 }
+
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!("core_crypto");

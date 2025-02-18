@@ -1,38 +1,38 @@
-use crate::mls::{ConversationId, MlsCentral, MlsConversation};
+use crate::context::CentralContext;
+use crate::mls::{ConversationId, MlsConversation};
 
 impl MlsConversation {
     /// Replaces the MLS group in memory with the one from keystore.
     /// see [crate::durable]
     pub async fn drop_and_restore(&mut self, backend: &mls_crypto_provider::MlsCryptoProvider) {
         use core_crypto_keystore::CryptoKeystoreMls as _;
-        use openmls_traits::OpenMlsCryptoProvider as _;
 
         let group_id = self.group.group_id();
-        let group = backend
-            .key_store()
+        let (parent_id, group) = backend
+            .keystore()
             .mls_groups_restore()
             .await
             .map(|mut groups| groups.remove(group_id.as_slice()).unwrap())
             .unwrap();
-        let group = MlsConversation::from_serialized_state(group).unwrap();
+        let group = MlsConversation::from_serialized_state(group, parent_id).unwrap();
         *self = group;
     }
 }
 
-impl MlsCentral {
+impl CentralContext {
     /// Replaces the MLS group in memory with the one from keystore.
     pub async fn drop_and_restore(&mut self, id: &ConversationId) {
         use core_crypto_keystore::CryptoKeystoreMls as _;
-        use openmls_traits::OpenMlsCryptoProvider as _;
 
-        let group = self
-            .mls_backend
-            .key_store()
+        let (parent_id, group) = self
+            .keystore()
+            .await
+            .unwrap()
             .mls_groups_restore()
             .await
             .map(|mut groups| groups.remove(id.as_slice()).unwrap())
             .unwrap();
-        let group = MlsConversation::from_serialized_state(group).unwrap();
-        self.mls_groups.insert(id.clone(), group).unwrap();
+        let group = MlsConversation::from_serialized_state(group, parent_id).unwrap();
+        self.mls_groups().await.unwrap().insert(id.clone(), group);
     }
 }

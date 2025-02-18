@@ -14,12 +14,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see http://www.gnu.org/licenses/.
 
-cfg_if::cfg_if! {
-    if #[cfg(feature = "mls-keystore")] {
-        mod mls;
-        pub use self::mls::*;
-    }
-}
+mod general;
+mod mls;
+
+pub use self::mls::*;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "proteus-keystore")] {

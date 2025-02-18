@@ -16,9 +16,14 @@
 
 use zeroize::Zeroize;
 
+use crate::connection::FetchFromDatabase;
+
 #[derive(Debug, Clone, Zeroize, PartialEq, Eq)]
 #[zeroize(drop)]
-#[cfg_attr(target_family = "wasm", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(target_family = "wasm", feature = "serde"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct ProteusIdentity {
     pub sk: Vec<u8>,
     pub pk: Vec<u8>,
@@ -45,7 +50,10 @@ impl ProteusIdentity {
 
 #[derive(Debug, Clone, Zeroize, PartialEq, Eq)]
 #[zeroize(drop)]
-#[cfg_attr(target_family = "wasm", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(target_family = "wasm", feature = "serde"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct ProteusPrekey {
     pub id: u16,
     id_bytes: Vec<u8>,
@@ -82,33 +90,29 @@ impl ProteusPrekey {
     }
 
     pub async fn get_free_id(conn: &crate::Connection) -> crate::CryptoKeystoreResult<u16> {
-        let count = conn.count::<Self>().await?;
-        Ok((count % u16::MAX as usize) as u16)
+        let mut id = 1u16;
+        let limit = u16::MAX;
+        while id <= limit {
+            if id == limit {
+                return Err(crate::CryptoKeystoreError::NoFreePrekeyId);
+            }
+            if conn.find::<Self>(&id.to_le_bytes()).await?.is_none() {
+                break;
+            }
+            id += 1;
+        }
+
+        Ok(id)
     }
 }
 
-#[derive(Debug, Clone, Zeroize, PartialEq, Eq)]
+#[derive(Debug, Clone, Zeroize, PartialEq, Eq, core_crypto_macros::Entity)]
 #[zeroize(drop)]
-#[cfg_attr(target_family = "wasm", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(target_family = "wasm", feature = "serde"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct ProteusSession {
     pub id: String,
     pub session: Vec<u8>,
 }
-
-// TODO: Implement this in CoreCrypto
-// impl TryFrom<proteus::keys::PreKey> for ProteusPrekey {
-//     type Error = crate::CryptoKeystoreError;
-//     fn try_from(prekey: proteus::keys::PreKey) -> crate::CryptoKeystoreResult<Self> {
-//         let id = prekey.key_id.value();
-//         let prekey = prekey.serialise()?;
-//         Ok(Self { id, prekey })
-//     }
-// }
-
-// impl TryInto<proteus::keys::PreKey> for ProteusPrekey {
-//     type Error = crate::CryptoKeystoreError;
-//     fn try_into(self) -> crate::CryptoKeystoreResult<proteus::keys::PreKey> {
-//         let prekey = proteus::keys::PreKey::deserialise(&self.prekey)?;
-//         Ok(prekey)
-//     }
-// }

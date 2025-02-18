@@ -1,6 +1,7 @@
-use criterion::{async_executor::FuturesExecutor, black_box, criterion_group, criterion_main, BatchSize, Criterion};
-
-use core_crypto::prelude::MlsProposal;
+use criterion::{
+    async_executor::AsyncStdExecutor as FuturesExecutor, black_box, criterion_group, criterion_main, BatchSize,
+    Criterion,
+};
 
 use crate::utils::*;
 
@@ -14,13 +15,17 @@ fn proposal_add_bench(c: &mut Criterion) {
             group.bench_with_input(case.benchmark_id(i + 1, in_memory), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, id) = setup_mls(ciphersuite, &credential, in_memory);
-                        add_clients(&mut central, &id, ciphersuite, *i);
-                        let (kp, ..) = rand_key_package(ciphersuite);
-                        (central, id, kp)
+                        async_std::task::block_on(async {
+                            let (central, id, ..) =
+                                setup_mls_and_add_clients(ciphersuite, credential.as_ref(), in_memory, *i).await;
+                            let (kp, ..) = rand_key_package(ciphersuite).await;
+                            (central, id, kp)
+                        })
                     },
-                    |(mut central, id, kp)| async move {
-                        black_box(central.new_proposal(&id, MlsProposal::Add(kp)).await.unwrap());
+                    |(central, id, kp)| async move {
+                        let context = central.new_transaction().await.unwrap();
+                        black_box(context.new_add_proposal(&id, kp).await.unwrap());
+                        context.finish().await.unwrap();
                     },
                     BatchSize::SmallInput,
                 )
@@ -37,12 +42,16 @@ fn proposal_remove_bench(c: &mut Criterion) {
             group.bench_with_input(case.benchmark_id(i + 1, in_memory), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, id) = setup_mls(ciphersuite, &credential, in_memory);
-                        let client_ids = add_clients(&mut central, &id, ciphersuite, *i);
-                        (central, id, client_ids.first().unwrap().clone())
+                        async_std::task::block_on(async {
+                            let (central, id, client_ids, ..) =
+                                setup_mls_and_add_clients(ciphersuite, credential.as_ref(), in_memory, *i).await;
+                            (central, id, client_ids.first().unwrap().clone())
+                        })
                     },
-                    |(mut central, id, client_id)| async move {
-                        black_box(central.new_proposal(&id, MlsProposal::Remove(client_id)).await.unwrap());
+                    |(central, id, client_id)| async move {
+                        let context = central.new_transaction().await.unwrap();
+                        black_box(context.new_remove_proposal(&id, client_id).await.unwrap());
+                        context.finish().await.unwrap();
                     },
                     BatchSize::SmallInput,
                 )
@@ -59,12 +68,16 @@ fn proposal_update_bench(c: &mut Criterion) {
             group.bench_with_input(case.benchmark_id(i + 1, in_memory), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, id) = setup_mls(ciphersuite, &credential, in_memory);
-                        add_clients(&mut central, &id, ciphersuite, *i);
-                        (central, id)
+                        async_std::task::block_on(async {
+                            let (central, id, ..) =
+                                setup_mls_and_add_clients(ciphersuite, credential.as_ref(), in_memory, *i).await;
+                            (central, id)
+                        })
                     },
-                    |(mut central, id)| async move {
-                        black_box(central.new_proposal(&id, MlsProposal::Update).await.unwrap());
+                    |(central, id)| async move {
+                        let context = central.new_transaction().await.unwrap();
+                        black_box(context.new_update_proposal(&id).await.unwrap());
+                        context.finish().await.unwrap();
                     },
                     BatchSize::SmallInput,
                 )

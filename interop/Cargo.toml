@@ -1,6 +1,6 @@
 [package]
 name = "interop"
-version = "0.6.0-rc.3"
+version = "4.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 
@@ -10,49 +10,50 @@ proteus = [
     "dep:cryptobox",
     "dep:proteus",
     "dep:proteus-wasm",
-    "dep:tempfile",
     "core-crypto/cryptobox-migrate",
-    "core-crypto/proteus"
+    "core-crypto/proteus",
 ]
+
+[lints]
+workspace = true
 
 [dependencies]
 color-eyre = "0.6"
 log = "0.4"
 femme = "2.2"
-dirs = "4.0"
+dirs = "6.0"
 core-crypto = { path = "../crypto" }
+core-crypto-ffi = { path = "../crypto-ffi" }
+openmls.workspace = true
+tls_codec.workspace = true
 
 # Utils
-async-trait = "0.1"
-serde_json = "1.0"
-sha2 = "0.10"
-hex = "0.4"
-base64 = "0.13"
-const_format = "0.2"
-rand = "0.8"
-bitflags = "1.3"
-uuid = { version = "1.1", features = ["v4"] }
-tempfile = { version = "3.3", optional = true }
+async-trait.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+const_format.workspace = true
+rand.workspace = true
+bitflags.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+tempfile = { version = "3.15" }
 # Terminal support
 xshell = "0.2"
-spinoff = "0.5"
+spinoff = { version = "0.8", features = [
+    "aesthetic",
+], default-features = false }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+async-fs = "2.1"
 cryptobox = { git = "https://github.com/wireapp/cryptobox", optional = true }
-proteus = { git = "https://github.com/wireapp//proteus", branch = "otak/fix-1.0.3", optional = true }
-tokio = { version = "1.20", features = ["full"] }
+proteus = { git = "https://github.com/wireapp/proteus", branch = "otak/fix-1.0.3", optional = true }
+tokio = { version = "1.43", features = ["full"] }
 # Http Server
 warp = { version = "0.3", default-features = false }
 # Webdriver stuff
-webdriver-install = "0.3"
-fantoccini = "0.19"
-
-[dependencies.proteus-wasm]
-version = "2.0"
-features = ["hazmat"]
-optional = true
-git = "https://github.com/wireapp/proteus"
-branch = "otak/2.0"
-
-
-
+webdriver-installation = { path = "../extras/webdriver-installation" }
+fantoccini = "0.21"
+proteus-wasm = { workspace = true, optional = true }

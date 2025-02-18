@@ -2,58 +2,91 @@
 name = "core-crypto-ffi"
 description = "Platform-specific bindings (Android, iOS, WASM) for CoreCrypto"
 repository = "https://github.com/wireapp/core-crypto"
-version = "0.6.0-rc.3"
+version = "4.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
 
 [lib]
 name = "core_crypto_ffi"
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["uniffi/cli"]
+
+[lints]
+workspace = true
 
 [features]
 default = ["proteus"]
-proteus = ["core-crypto/proteus", "core-crypto/cryptobox-migrate"]
-mobile = ["uniffi", "uniffi_macros", "uniffi_build", "uniffi_bindgen"]
+proteus = [
+    "core-crypto/proteus",
+    "core-crypto/cryptobox-migrate",
+    "dep:proteus-wasm",
+    "dep:core-crypto-keystore",
+]
 
 [dependencies]
-core-crypto = { version = "0.6.0-rc.3", path = "../crypto" }
-thiserror = "1.0"
-cfg-if = "1.0"
-futures-util = "0.3"
-
-# UniFFI - Android + iOS bindings - Runtime support
-uniffi = { version = "0.21", optional = true }
-uniffi_macros = { version = "0.21", optional = true }
+thiserror.workspace = true
+cfg-if.workspace = true
+futures-util.workspace = true
+async-trait.workspace = true
+tls_codec.workspace = true
+async-lock.workspace = true
+log.workspace = true
+log-reload.workspace = true
+serde_json.workspace = true
+derive_more.workspace = true
+proteus-wasm = { workspace = true, optional = true }
+core-crypto-keystore = { workspace = true, optional = true }
 
 # see https://github.com/RustCrypto/hashes/issues/404
 [target.'cfg(not(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86")))'.dependencies]
 sha2 = { version = "0.10", features = ["force-soft"] }
 
-# Blocking APIs support
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-futures-lite = "1.12"
-async-executor = "1.4"
+# UniFFI - Android + iOS bindings - Runtime support
+uniffi.workspace = true
+core-crypto = { workspace = true, features = ["uniffi"] }
 
 [target.wasm32-unknown-unknown.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-async-lock = "2.5"
-serde-wasm-bindgen = "0.4"
-serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
 js-sys = "0.3"
+web-sys = "0.3"
+strum.workspace = true
+core-crypto.workspace = true
+
+# UniFFI - Android + iOS bindings - Build support
+[target.'cfg(not(target_family = "wasm"))'.build-dependencies.uniffi]
+workspace = true
+features = ["build", "bindgen"]
 
 [build-dependencies]
-# UniFFI - Android + iOS bindings - Build support
-uniffi_build = { version = "0.21", features = ["builtin-bindgen"], optional = true }
-uniffi_bindgen = { version = "0.21", optional = true }
 cfg-if = "1.0"
-
-[dev-dependencies]
-uniffi = { version = "0.21", features = ["builtin-bindgen"] }
 
 [target.wasm32-unknown-unknown.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
+[package.metadata.wasm-pack.profile.dev]
+wasm-opt = false
+
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Os", "--enable-mutable-globals", "--enable-threads", "--detect-features"]
+wasm-opt = [
+    "-Os",
+    "--enable-mutable-globals",
+    "--enable-threads",
+    "--detect-features",
+]
+
+[dev-dependencies]
+testing_logger = "0.1.1"
+tokio = { version = "1.43.0", default-features = false, features = [
+    "macros",
+    "rt",
+] }

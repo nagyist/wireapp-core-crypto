@@ -1,12 +1,14 @@
-use crate::utils::*;
-use core_crypto::mls::MlsCiphersuite;
-use core_crypto::prelude::CertificateBundle;
+use crate::utils::{proteus_bench::*, *};
+use core_crypto::prelude::{CertificateBundle, MlsCiphersuite};
 use criterion::{
-    async_executor::FuturesExecutor, black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion,
+    async_executor::AsyncStdExecutor as FuturesExecutor, black_box, criterion_group, criterion_main, BatchSize,
+    BenchmarkId, Criterion,
 };
-use futures_lite::future::block_on;
-use proteus::keys;
-use proteus::keys::{PreKey, PreKeyBundle};
+
+use proteus::{
+    keys,
+    keys::{PreKey, PreKeyBundle},
+};
 use rand::distributions::{Alphanumeric, DistString};
 
 #[path = "utils/mod.rs"]
@@ -14,7 +16,7 @@ mod utils;
 
 fn mls_cases() -> Vec<(MlsCiphersuite, Option<CertificateBundle>, bool, &'static str)> {
     // Ciphersuite 3 is the closest to proteus one
-    const CIPHERSUITE: MlsTestCase = MlsTestCase::Basic_Ciphersuite3;
+    const CIPHERSUITE: MlsTestCase = MlsTestCase::Basic_Ciphersuite1;
     let (_, ciphersuite, credential) = CIPHERSUITE.get();
     let in_memory = (ciphersuite, credential.clone(), true, "MLS/mem");
     let in_db = (ciphersuite, credential, false, "MLS/db");
@@ -37,19 +39,24 @@ fn proteus_cases() -> Vec<(bool, &'static str)> {
 
 fn encrypt_message_bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("Mls vs Proteus: encrypt");
-    for i in (GROUP_RANGE).step_by(GROUP_STEP) {
+    for i in (GROUP_RANGE_PROTEUS).step_by(GROUP_STEP_PROTEUS) {
         // MLS
         for (ciphersuite, credential, in_memory, bench_name) in mls_cases() {
             group.bench_with_input(BenchmarkId::new(bench_name, i), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, id) = setup_mls(ciphersuite, &credential, in_memory);
-                        add_clients(&mut central, &id, ciphersuite, *i);
-                        let text = Alphanumeric.sample_string(&mut rand::thread_rng(), MSG_MAX);
-                        (central, id, text)
+                        async_std::task::block_on(async {
+                            let (mut central, id, delivery_service) =
+                                setup_mls(ciphersuite, credential.as_ref(), in_memory).await;
+                            add_clients(&mut central, &id, ciphersuite, *i, delivery_service).await;
+                            let text = Alphanumeric.sample_string(&mut rand::thread_rng(), MSG_MAX);
+                            (central, id, text)
+                        })
                     },
-                    |(mut central, id, text)| async move {
-                        black_box(central.encrypt_message(&id, text).await.unwrap());
+                    |(central, id, text)| async move {
+                        let context = central.new_transaction().await.unwrap();
+                        black_box(context.encrypt_message(&id, text).await.unwrap());
+                        context.finish().await.unwrap();
                     },
                     BatchSize::SmallInput,
                 )
@@ -60,29 +67,26 @@ fn encrypt_message_bench(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new(bench_name, i), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, keystore) = setup_proteus(in_memory);
-                        let session_material = (0..*i)
-                            .map(|_| (session_id(), new_prekey().serialise().unwrap()))
-                            .collect::<Vec<(String, Vec<u8>)>>();
-                        for (session_id, key) in &session_material {
-                            block_on(async {
-                                central.session_from_prekey(session_id, key).await.unwrap();
-                                central.session_save(&keystore, session_id).await.unwrap();
-                            });
-                        }
-                        let text = Alphanumeric.sample_string(&mut rand::thread_rng(), MSG_MAX);
-                        (central, keystore, session_material, text)
+                        async_std::task::block_on(async {
+                            let central = setup_proteus(in_memory).await;
+                            let context = central.new_transaction().await.unwrap();
+                            let session_material = (0..*i)
+                                .map(|_| (session_id(), new_prekey().serialise().unwrap()))
+                                .collect::<Vec<(String, Vec<u8>)>>();
+                            for (session_id, key) in &session_material {
+                                context.proteus_session_from_prekey(session_id, key).await.unwrap();
+                            }
+                            let text = Alphanumeric.sample_string(&mut rand::thread_rng(), MSG_MAX);
+                            context.finish().await.unwrap();
+                            (central, session_material, text)
+                        })
                     },
-                    |(mut central, mut keystore, session_material, text)| async move {
+                    |(central, session_material, text)| async move {
+                        let context = central.new_transaction().await.unwrap();
                         for (session_id, _) in session_material {
-                            black_box(
-                                central
-                                    .encrypt(&mut keystore, &session_id, text.as_bytes())
-                                    .await
-                                    .unwrap(),
-                            );
-                            black_box(central.session_save(&keystore, &session_id).await.unwrap());
+                            black_box(context.proteus_encrypt(&session_id, text.as_bytes()).await.unwrap());
                         }
+                        context.finish().await.unwrap();
                     },
                     BatchSize::SmallInput,
                 )
@@ -94,20 +98,25 @@ fn encrypt_message_bench(c: &mut Criterion) {
 
 fn add_client_bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("Mls vs Proteus: add");
-    for i in (GROUP_RANGE).step_by(GROUP_STEP) {
+    for i in (GROUP_RANGE_PROTEUS).step_by(GROUP_STEP_PROTEUS) {
         // MLS
         for (ciphersuite, credential, in_memory, bench_name) in mls_cases() {
             group.bench_with_input(BenchmarkId::new(bench_name, i), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, id) = setup_mls(ciphersuite, &credential, in_memory);
-                        add_clients(&mut central, &id, ciphersuite, *i);
-                        let member = rand_member(ciphersuite);
-                        (central, id, member)
+                        async_std::task::block_on(async {
+                            let (mut central, id, delivery_service) =
+                                setup_mls(ciphersuite, credential.as_ref(), in_memory).await;
+                            add_clients(&mut central, &id, ciphersuite, *i, delivery_service).await;
+                            let (kp, _) = rand_key_package(ciphersuite).await;
+                            (central, id, vec![kp.into()])
+                        })
                     },
-                    |(mut central, id, member)| async move {
-                        black_box(central.add_members_to_conversation(&id, &mut [member]).await.unwrap());
-                        black_box(central.commit_accepted(&id).await.unwrap());
+                    |(central, id, kps)| async move {
+                        let context = central.new_transaction().await.unwrap();
+                        black_box(context.add_members_to_conversation(&id, kps).await.unwrap());
+                        context.finish().await.unwrap();
+                        black_box(());
                     },
                     BatchSize::SmallInput,
                 )
@@ -120,17 +129,20 @@ fn add_client_bench(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new(bench_name, i), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (central, keystore) = setup_proteus(in_memory);
-                        let session_material = (0..*i)
-                            .map(|_| (session_id(), new_prekey().serialise().unwrap()))
-                            .collect::<Vec<(String, Vec<u8>)>>();
-                        (central, keystore, session_material)
+                        async_std::task::block_on(async {
+                            let central = setup_proteus(in_memory).await;
+                            let session_material = (0..*i)
+                                .map(|_| (session_id(), new_prekey().serialise().unwrap()))
+                                .collect::<Vec<(String, Vec<u8>)>>();
+                            (central, session_material)
+                        })
                     },
-                    |(mut central, keystore, session_material)| async move {
+                    |(central, session_material)| async move {
+                        let context = central.new_transaction().await.unwrap();
                         for (session_id, key) in session_material {
-                            black_box(central.session_from_prekey(&session_id, &key).await.unwrap());
-                            black_box(central.session_save(&keystore, &session_id).await.unwrap());
+                            black_box(context.proteus_session_from_prekey(&session_id, &key).await.unwrap());
                         }
+                        context.finish().await.unwrap();
                     },
                     BatchSize::SmallInput,
                 )
@@ -142,25 +154,31 @@ fn add_client_bench(c: &mut Criterion) {
 
 fn remove_client_bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("Mls vs Proteus: remove");
-    for i in (GROUP_RANGE).step_by(GROUP_STEP) {
+    for i in (GROUP_RANGE_PROTEUS).step_by(GROUP_STEP_PROTEUS) {
         // MLS
         for (ciphersuite, credential, in_memory, bench_name) in mls_cases() {
             group.bench_with_input(BenchmarkId::new(bench_name, i), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, id) = setup_mls(ciphersuite, &credential, in_memory);
-                        let client_ids = add_clients(&mut central, &id, ciphersuite, GROUP_MAX);
-                        let to_remove = client_ids[..*i].to_vec();
-                        (central, id, to_remove)
+                        async_std::task::block_on(async {
+                            let (mut central, id, delivery_service) =
+                                setup_mls(ciphersuite, credential.as_ref(), in_memory).await;
+                            let (client_ids, ..) =
+                                add_clients(&mut central, &id, ciphersuite, GROUP_MAX_PROTEUS, delivery_service).await;
+                            let to_remove = client_ids[..*i].to_vec();
+                            (central, id, to_remove)
+                        })
                     },
-                    |(mut central, id, client_ids)| async move {
+                    |(central, id, client_ids)| async move {
+                        let context = central.new_transaction().await.unwrap();
                         black_box(
-                            central
+                            context
                                 .remove_members_from_conversation(&id, client_ids.as_slice())
                                 .await
                                 .unwrap(),
                         );
-                        black_box(central.commit_accepted(&id).await.unwrap());
+                        context.finish().await.unwrap();
+                        black_box(());
                     },
                     BatchSize::SmallInput,
                 )
@@ -173,22 +191,26 @@ fn remove_client_bench(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new(bench_name, i), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, keystore) = setup_proteus(in_memory);
-                        let session_material = (0..*i)
-                            .map(|_| (session_id(), new_prekey().serialise().unwrap()))
-                            .collect::<Vec<(String, Vec<u8>)>>();
-                        for (session_id, key) in &session_material {
-                            block_on(async {
-                                central.session_from_prekey(session_id, key).await.unwrap();
-                                central.session_save(&keystore, session_id).await.unwrap();
-                            });
-                        }
-                        (central, keystore, session_material)
+                        async_std::task::block_on(async {
+                            let central = setup_proteus(in_memory).await;
+                            let session_material = (0..*i)
+                                .map(|_| (session_id(), new_prekey().serialise().unwrap()))
+                                .collect::<Vec<(String, Vec<u8>)>>();
+                            let context = central.new_transaction().await.unwrap();
+                            for (session_id, key) in &session_material {
+                                context.proteus_session_from_prekey(session_id, key).await.unwrap();
+                            }
+                            context.finish().await.unwrap();
+                            (central, session_material)
+                        })
                     },
-                    |(mut central, keystore, session_material)| async move {
+                    |(central, session_material)| async move {
+                        let context = central.new_transaction().await.unwrap();
                         for (session_id, _) in session_material {
-                            black_box(central.session_delete(&keystore, &session_id).await.unwrap());
+                            context.proteus_session_delete(&session_id).await.unwrap();
+                            black_box(());
                         }
+                        context.finish().await.unwrap();
                     },
                     BatchSize::SmallInput,
                 )
@@ -200,19 +222,24 @@ fn remove_client_bench(c: &mut Criterion) {
 
 fn update_client_bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("Mls vs Proteus: update");
-    for i in (GROUP_RANGE).step_by(GROUP_STEP) {
+    for i in (GROUP_RANGE_PROTEUS).step_by(GROUP_STEP_PROTEUS) {
         // MLS
         for (ciphersuite, credential, in_memory, bench_name) in mls_cases() {
             group.bench_with_input(BenchmarkId::new(bench_name, i), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, id) = setup_mls(ciphersuite, &credential, in_memory);
-                        add_clients(&mut central, &id, ciphersuite, *i);
-                        (central, id)
+                        async_std::task::block_on(async {
+                            let (mut central, id, delivery_service) =
+                                setup_mls(ciphersuite, credential.as_ref(), in_memory).await;
+                            add_clients(&mut central, &id, ciphersuite, *i, delivery_service).await;
+                            (central, id)
+                        })
                     },
-                    |(mut central, id)| async move {
-                        black_box(central.update_keying_material(&id).await.unwrap());
-                        black_box(central.commit_accepted(&id).await.unwrap());
+                    |(central, id)| async move {
+                        let context = central.new_transaction().await.unwrap();
+                        black_box(context.update_keying_material(&id).await.unwrap());
+                        context.finish().await.unwrap();
+                        black_box(());
                     },
                     BatchSize::SmallInput,
                 )
@@ -225,33 +252,39 @@ fn update_client_bench(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new(bench_name, i), &i, |b, i| {
                 b.to_async(FuturesExecutor).iter_batched(
                     || {
-                        let (mut central, keystore) = setup_proteus(in_memory);
-                        let session_material = (0..*i)
-                            .map(|_| (session_id(), new_prekey().serialise().unwrap()))
-                            .collect::<Vec<(String, Vec<u8>)>>();
-                        for (session_id, key) in &session_material {
-                            block_on(async {
-                                central.session_from_prekey(session_id, key).await.unwrap();
-                                central.session_save(&keystore, session_id).await.unwrap();
-                            });
-                        }
-                        let new_pkb = black_box(
-                            PreKeyBundle::new(
+                        async_std::task::block_on(async {
+                            let central = setup_proteus(in_memory).await;
+                            let session_material = (0..*i)
+                                .map(|_| (session_id(), new_prekey().serialise().unwrap()))
+                                .collect::<Vec<(String, Vec<u8>)>>();
+                            let context = central.new_transaction().await.unwrap();
+                            for (session_id, key) in &session_material {
+                                context.proteus_session_from_prekey(session_id, key).await.unwrap();
+                            }
+                            context.finish().await.unwrap();
+                            let new_pkb = PreKeyBundle::new(
                                 keys::IdentityKeyPair::new().public_key,
                                 &PreKey::new(keys::PreKeyId::new(2)),
                             )
                             .serialise()
-                            .unwrap(),
-                        );
-                        (central, keystore, new_pkb, session_material)
+                            .unwrap();
+                            (central, new_pkb, session_material)
+                        })
                     },
-                    |(mut central, keystore, new_pkb, session_material)| async move {
+                    |(central, new_pkb, session_material)| async move {
+                        let context = central.new_transaction().await.unwrap();
                         for (session_id, _) in session_material {
                             // replace existing session
-                            black_box(central.session_delete(&keystore, &session_id).await.unwrap());
-                            black_box(central.session_from_prekey(&session_id, &new_pkb).await.unwrap());
-                            black_box(central.session_save(&keystore, &session_id).await.unwrap());
+                            context.proteus_session_delete(&session_id).await.unwrap();
+                            black_box(());
+                            black_box(
+                                context
+                                    .proteus_session_from_prekey(&session_id, &new_pkb)
+                                    .await
+                                    .unwrap(),
+                            );
                         }
+                        context.finish().await.unwrap();
                     },
                     BatchSize::SmallInput,
                 )

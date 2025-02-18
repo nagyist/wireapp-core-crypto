@@ -16,7 +16,15 @@
 
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 
+#[cfg(not(target_family = "wasm"))]
+use crate::clients::{EmulatedClient, EmulatedProteusClient};
+#[cfg(not(target_family = "wasm"))]
+use crate::util::{MlsTransportSuccessProvider, MlsTransportTestExt};
 use color_eyre::eyre::{eyre, Result};
+use core_crypto::prelude::CiphersuiteName;
+use std::rc::Rc;
+use std::sync::Arc;
+use tls_codec::Serialize;
 
 #[cfg(not(target_family = "wasm"))]
 mod build;
@@ -34,8 +42,10 @@ const MLS_MAIN_CLIENTID: &[u8] = b"test_main";
 const MLS_CONVERSATION_ID: &[u8] = b"test_conversation";
 const ROUNDTRIP_MSG_AMOUNT: usize = 100;
 
-// TODO: Add support for Android emulator
-// TODO: Add support for iOS emulator when on macOS
+const CIPHERSUITE_IN_USE: CiphersuiteName = CiphersuiteName::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
+
+// TODO: Add support for Android emulator. Tracking issue: WPB-9646
+// TODO: Add support for iOS emulator when on macOS. Tracking issue: WPB-9646
 fn main() -> Result<()> {
     run_test()
 }
@@ -62,6 +72,7 @@ fn run_test() -> Result<()> {
         log::info!("cwd was {current_dir:?}; setting it to {new_cwd:?}");
         std::env::set_current_dir(new_cwd)?;
     }
+    let tempdir = tempfile::tempdir()?;
 
     // because cannot use `#[tokio::main]` on wasm target because tokio does not compile on this target
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -70,14 +81,13 @@ fn run_test() -> Result<()> {
         .unwrap();
 
     runtime.block_on(async {
-        let _ = tokio::task::spawn_blocking(move || build::web::webdriver::setup_webdriver(force_webdriver_install))
-            .await?;
+        build::web::webdriver::setup_webdriver(force_webdriver_install).await?;
 
-        build::web::wasm::build_wasm().await?;
+        build::web::wasm::build_wasm(tempdir.path().to_path_buf()).await?;
 
         let spinner = util::RunningProcess::new("Starting HTTP server...", false);
-        let http_server_hwnd = tokio::task::spawn(build::web::wasm::spawn_http_server());
-        spinner.success(&format!("HTTP server started at 0.0.0.0:{TEST_SERVER_PORT} [OK]"));
+        let http_server_hwnd = tokio::task::spawn(build::web::wasm::spawn_http_server(tempdir.path().to_path_buf()));
+        spinner.success(format!("HTTP server started at 0.0.0.0:{TEST_SERVER_PORT} [OK]"));
 
         let mut spinner = util::RunningProcess::new("Starting WebDriver [ChromeDriver & GeckoDriver]...", false);
         let chrome_driver_addr = TcpListener::bind("127.0.0.1:0").await?.local_addr()?;
@@ -112,53 +122,73 @@ fn run_test() -> Result<()> {
 
 #[cfg(not(target_family = "wasm"))]
 async fn run_mls_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<()> {
-    use core_crypto::prelude::{tls_codec::Serialize, *};
+    use core_crypto::prelude::*;
+    use rand::distributions::DistString;
+
+    log::info!("Using ciphersuite {}", CIPHERSUITE_IN_USE);
 
     let spinner = util::RunningProcess::new("[MLS] Step 0: Initializing clients & env...", true);
 
-    let mut clients: Vec<Box<dyn clients::EmulatedMlsClient>> = vec![];
-    clients.push(Box::new(
-        clients::corecrypto::native::CoreCryptoNativeClient::new().await?,
-    ));
-    clients.push(Box::new(
-        clients::corecrypto::web::CoreCryptoWebClient::new(chrome_driver_addr).await?,
-    ));
+    let ios_client = Rc::new(clients::corecrypto::ios::CoreCryptoIosClient::new().await?);
+    let native_client = Rc::new(clients::corecrypto::native::CoreCryptoNativeClient::new().await?);
+    let ffi_client = Rc::new(clients::corecrypto::ffi::CoreCryptoFfiClient::new().await?);
+    let web_client = Rc::new(clients::corecrypto::web::CoreCryptoWebClient::new(chrome_driver_addr).await?);
 
-    let ciphersuites = vec![MlsCiphersuite::default()];
+    let mut clients: Vec<Rc<dyn clients::EmulatedMlsClient>> = vec![
+        native_client.clone(),
+        ffi_client.clone(),
+        web_client.clone(),
+        ios_client.clone(),
+    ];
+
+    let ciphersuites = vec![CIPHERSUITE_IN_USE.into()];
     let configuration = MlsCentralConfiguration::try_new(
         "whatever".into(),
         "test".into(),
         Some(MLS_MAIN_CLIENTID.into()),
         ciphersuites,
+        None,
+        Some(100),
     )?;
-    let mut master_client = MlsCentral::try_new_in_memory(configuration, None).await?;
+    let master_client = MlsCentral::try_new_in_memory(configuration).await?;
 
     let conversation_id = MLS_CONVERSATION_ID.to_vec();
-    master_client
-        .new_conversation(conversation_id.clone(), Default::default())
+    let config = MlsConversationConfiguration {
+        ciphersuite: CIPHERSUITE_IN_USE.into(),
+        ..Default::default()
+    };
+    let cc = CoreCrypto::from(master_client.clone());
+
+    let success_provider = Arc::new(MlsTransportSuccessProvider::default());
+
+    cc.provide_transport(success_provider.clone()).await;
+    let transaction = cc.new_transaction().await?;
+    transaction
+        .new_conversation(&conversation_id, MlsCredentialType::Basic, config)
         .await?;
 
     spinner.success("[MLS] Step 0: Initializing clients [OK]");
 
     let spinner = util::RunningProcess::new("[MLS] Step 1: Fetching KeyPackages from clients...", true);
 
-    let mut members = vec![];
+    use tls_codec::Deserialize as _;
+    let mut key_packages = vec![];
     for c in clients.iter_mut() {
         let kp = c.get_keypackage().await?;
-        members.push(ConversationMember::new_raw(c.client_id().into(), kp)?);
+        let kp = KeyPackageIn::tls_deserialize(&mut kp.as_slice())?;
+        key_packages.push(kp);
     }
 
     spinner.success("[MLS] Step 1: KeyPackages [OK]");
 
     let spinner = util::RunningProcess::new("[MLS] Step 2: Adding clients to conversation...", true);
 
-    let conversation_add_msg = master_client
-        .add_members_to_conversation(&conversation_id, members.as_mut_slice())
+    transaction
+        .add_members_to_conversation(&conversation_id, key_packages)
         .await?;
 
-    master_client.commit_accepted(&conversation_id).await?;
-
-    let welcome_raw = conversation_add_msg.welcome.tls_serialize_detached()?;
+    let conversation_add_msg = success_provider.latest_welcome_message().await;
+    let welcome_raw = conversation_add_msg.tls_serialize_detached()?;
 
     for c in clients.iter_mut() {
         let conversation_id_from_welcome = c.process_welcome(&welcome_raw).await?;
@@ -173,16 +203,20 @@ async fn run_mls_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<()> {
     );
 
     let mut prng = rand::thread_rng();
-    let mut message = [0u8; 128];
-    for i in 0..ROUNDTRIP_MSG_AMOUNT {
-        use rand::RngCore as _;
+    let mut message;
+    for i in 1..=ROUNDTRIP_MSG_AMOUNT {
+        message = rand::distributions::Alphanumeric.sample_string(&mut prng, 16);
 
-        prng.fill_bytes(&mut message);
+        log::info!(
+            "Master client [{}] >>> {}",
+            hex::encode(master_client.client_id().await?.as_slice()),
+            message
+        );
 
-        let mut message_to_decrypt = master_client.encrypt_message(&conversation_id, &message).await?;
+        let mut message_to_decrypt = transaction.encrypt_message(&conversation_id, &message).await?;
 
         for c in clients.iter_mut() {
-            let decrypted_message = c
+            let decrypted_message_raw = c
                 .decrypt_message(&conversation_id, &message_to_decrypt)
                 .await?
                 .ok_or_else(|| {
@@ -192,6 +226,15 @@ async fn run_mls_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<()> {
                     )
                 })?;
 
+            let decrypted_message = String::from_utf8(decrypted_message_raw)?;
+
+            log::info!(
+                "{} [{}] <<< {}",
+                c.client_name(),
+                hex::encode(c.client_id()),
+                decrypted_message
+            );
+
             assert_eq!(
                 decrypted_message,
                 message,
@@ -199,14 +242,18 @@ async fn run_mls_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<()> {
                 c.client_type()
             );
 
-            message_to_decrypt = c.encrypt_message(&conversation_id, &decrypted_message).await?;
+            message_to_decrypt = c
+                .encrypt_message(&conversation_id, decrypted_message.as_bytes())
+                .await?;
         }
 
-        let decrypted_master = master_client
+        let decrypted_master_raw = transaction
             .decrypt_message(&conversation_id, message_to_decrypt)
             .await?
             .app_msg
-            .ok_or_else(|| eyre!("[MLS] No message recieved on master client"))?;
+            .ok_or_else(|| eyre!("[MLS] No message received on master client"))?;
+
+        let decrypted_master = String::from_utf8(decrypted_master_raw)?;
 
         assert_eq!(decrypted_master, message);
 
@@ -215,9 +262,32 @@ async fn run_mls_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<()> {
         ));
     }
 
-    spinner.success(&format!(
+    clients.clear();
+
+    spinner.success(format!(
         "[MLS] Step 3: Roundtripping {ROUNDTRIP_MSG_AMOUNT} messages... [OK]"
     ));
+
+    let spinner = util::RunningProcess::new("[MLS] Step 4: Deleting clients...", true);
+
+    Rc::into_inner(ios_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+    Rc::into_inner(native_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+    Rc::into_inner(ffi_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+    Rc::into_inner(web_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+
+    spinner.success("[MLS] Step 4: Deleting clients [OK]");
 
     Ok(())
 }
@@ -228,32 +298,49 @@ async fn run_proteus_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<(
 
     let spinner = util::RunningProcess::new("[Proteus] Step 0: Initializing clients & env...", true);
 
-    let mut clients: Vec<Box<dyn clients::EmulatedProteusClient>> = vec![];
-    clients.push(Box::new(
-        clients::corecrypto::native::CoreCryptoNativeClient::new().await?,
-    ));
-    clients.push(Box::new(
-        clients::corecrypto::web::CoreCryptoWebClient::new(chrome_driver_addr).await?,
-    ));
-    clients.push(Box::new(clients::cryptobox::native::CryptoboxNativeClient::new()));
-    clients.push(Box::new(
-        clients::cryptobox::web::CryptoboxWebClient::new(chrome_driver_addr).await?,
-    ));
+    let mut ios_client = clients::corecrypto::ios::CoreCryptoIosClient::new().await?;
+    let mut native_client = clients::corecrypto::native::CoreCryptoNativeClient::new().await?;
+    let mut ffi_client = clients::corecrypto::ffi::CoreCryptoFfiClient::new().await?;
+    let mut web_client = clients::corecrypto::web::CoreCryptoWebClient::new(chrome_driver_addr).await?;
+    let mut cryptobox_native_client = clients::cryptobox::native::CryptoboxNativeClient::new();
+    let mut cryptobox_web_client = clients::cryptobox::web::CryptoboxWebClient::new(chrome_driver_addr).await?;
 
-    for c in clients.iter_mut() {
-        c.init().await?;
-    }
+    ios_client.init().await?;
+    native_client.init().await?;
+    ffi_client.init().await?;
+    web_client.init().await?;
+    cryptobox_native_client.init().await?;
+    cryptobox_web_client.init().await?;
+
+    let ios_client = Rc::new(ios_client);
+    let native_client = Rc::new(native_client);
+    let ffi_client = Rc::new(ffi_client);
+    let web_client = Rc::new(web_client);
+    let cryptobox_native_client = Rc::new(cryptobox_native_client);
+    let cryptobox_web_client = Rc::new(cryptobox_web_client);
+
+    let mut clients: Vec<Rc<dyn clients::EmulatedProteusClient>> = vec![
+        ios_client.clone(),
+        native_client.clone(),
+        ffi_client.clone(),
+        web_client.clone(),
+        cryptobox_native_client.clone(),
+        cryptobox_web_client.clone(),
+    ];
 
     let configuration = MlsCentralConfiguration::try_new(
         "whatever".into(),
         "test".into(),
         Some(MLS_MAIN_CLIENTID.into()),
         vec![MlsCiphersuite::default()],
+        None,
+        Some(100),
     )?;
-    let mut master_client = CoreCrypto::from(MlsCentral::try_new_in_memory(configuration, None).await?);
-    master_client.proteus_init().await?;
+    let master_client = CoreCrypto::from(MlsCentral::try_new_in_memory(configuration).await?);
+    let transaction = master_client.new_transaction().await?;
+    transaction.proteus_init().await?;
 
-    let master_fingerprint = master_client.proteus_fingerprint()?;
+    let master_fingerprint = master_client.proteus_fingerprint().await?;
 
     spinner.success("[Proteus] Step 0: Initializing clients [OK]");
 
@@ -283,7 +370,8 @@ async fn run_proteus_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<(
             "[Proteus] Step 2: Session master -> {fingerprint}@{}",
             client_type_mapping[&fingerprint]
         ));
-        let session = master_client.proteus_session_from_prekey(&fingerprint, &prekey).await?;
+        let session_arc = transaction.proteus_session_from_prekey(&fingerprint, &prekey).await?;
+        let mut session = session_arc.write().await;
         messages.insert(fingerprint, session.encrypt(PROTEUS_INITIAL_MESSAGE)?);
         master_sessions.push(session.identifier().to_string());
     }
@@ -317,9 +405,7 @@ async fn run_proteus_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<(
 
         prng.fill_bytes(&mut message);
 
-        let mut messages_to_decrypt = master_client
-            .proteus_encrypt_batched(&master_sessions, &message)
-            .await?;
+        let mut messages_to_decrypt = transaction.proteus_encrypt_batched(&master_sessions, &message).await?;
 
         for c in clients.iter_mut() {
             let fingerprint = c.fingerprint().await?;
@@ -333,8 +419,9 @@ async fn run_proteus_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<(
             assert_eq!(
                 decrypted_message,
                 message,
-                "[Proteus] Messages differ [Client = {}]",
-                c.client_type()
+                "[Proteus] Messages differ [Client = {}::{}]",
+                c.client_name(),
+                c.client_type(),
             );
 
             let ciphertext = c.encrypt(&session_id_with_master, &decrypted_message).await?;
@@ -342,7 +429,7 @@ async fn run_proteus_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<(
         }
 
         for (fingerprint, encrypted) in master_messages_to_decrypt.drain() {
-            let decrypted = master_client.proteus_decrypt(&fingerprint, &encrypted).await?;
+            let decrypted = transaction.proteus_decrypt(&fingerprint, &encrypted).await?;
             assert_eq!(decrypted, message);
         }
 
@@ -351,9 +438,40 @@ async fn run_proteus_test(chrome_driver_addr: &std::net::SocketAddr) -> Result<(
         ));
     }
 
-    spinner.success(&format!(
+    clients.clear();
+
+    spinner.success(format!(
         "[Proteus] Step 3: Roundtripping {ROUNDTRIP_MSG_AMOUNT} messages... [OK]"
     ));
+
+    let spinner = util::RunningProcess::new("[Proteus] Step 4: Deleting clients...", true);
+
+    Rc::into_inner(ios_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+    Rc::into_inner(native_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+    Rc::into_inner(ffi_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+    Rc::into_inner(web_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+    Rc::into_inner(cryptobox_native_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+    Rc::into_inner(cryptobox_web_client)
+        .expect("Only one strong reference to the interop client")
+        .wipe()
+        .await?;
+
+    spinner.success("[Proteus] Step 4: Deleting clients [OK]");
 
     Ok(())
 }

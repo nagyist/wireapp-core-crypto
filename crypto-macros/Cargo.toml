@@ -1,0 +1,19 @@
+[package]
+name = "core-crypto-macros"
+description = "Macros for core-crypto"
+repository = "https://github.com/wireapp/core-crypto"
+version = "4.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+heck = "0.5"
